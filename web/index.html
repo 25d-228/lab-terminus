@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab Terminus</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/devicon@2.16.0/devicon.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+</head>
+<body>
+<div class="lt-page">
+  <div class="lt-window">
+  <input type="checkbox" class="lt-dayck" id="lt-day" checked>
+  <input type="radio" name="ltpal" id="th-nord">
+  <input type="radio" name="ltpal" id="th-rose">
+  <input type="radio" name="ltpal" id="th-sol" checked>
+  <input type="radio" name="ltpal" id="th-gruv">
+  <input type="radio" name="ltpal" id="th-drac">
+  <input type="radio" name="ltpal" id="th-tokyo">
+  <input type="radio" name="ltpal" id="th-catppuccin">
+  <input type="radio" name="ltpal" id="th-everforest">
+
+  <div class="lt-titlebar" data-tauri-drag-region>
+    <span class="lt-brand" data-tauri-drag-region><span class="lt-led"></span>Lab<span class="tm">Terminus</span></span>
+    <span class="lt-sub" data-tauri-drag-region>yue_ziran · NLP Lab</span>
+    <span class="lt-grow" data-tauri-drag-region></span>
+    <label class="lt-theme" for="lt-day"><span class="on-dark">◐ Day</span><span class="on-day">◑ Night</span></label>
+    <span class="lt-kbd">⌘ K</span>
+    <span class="lt-wins">
+      <span class="lt-wc" data-wc="min" title="Minimize">—</span>
+      <span class="lt-wc" data-wc="max" title="Maximize">▢</span>
+      <span class="lt-wc cl" data-wc="close" title="Close">✕</span>
+    </span>
+  </div>
+
+  <div class="lt-body">
+    <aside class="lt-side" id="lt-side"></aside>
+    <main class="lt-main">
+      <div class="lt-shead" id="lt-shead"></div>
+      <nav class="lt-tabs" id="lt-subtabs"></nav>
+      <div class="lt-view" id="lt-view"></div>
+    </main>
+  </div>
+
+  <div class="lt-status">
+    <span class="lt-stat"><span class="lt-led"></span><span id="lt-conn">connecting…</span></span>
+    <span class="lt-stat">live · SSH · SFTP · WSL · DSM</span>
+    <span class="lt-stat lt-xfer" id="lt-xfer-btn" title="Transfers"><span>⇅ Transfers</span><b id="lt-xfer-n" class="lt-xfer-n"></b></span>
+    <span class="lt-pals">
+      <label class="lt-pal" for="th-nord"><i style="color:#88c0d0;background:#88c0d0"></i>Nord</label>
+      <label class="lt-pal" for="th-rose"><i style="color:#eb6f92;background:#eb6f92"></i>Rosé Pine</label>
+      <label class="lt-pal" for="th-sol"><i style="color:#268bd2;background:#268bd2"></i>Solarized</label>
+      <label class="lt-pal" for="th-gruv"><i style="color:#fe8019;background:#fe8019"></i>Gruvbox</label>
+      <label class="lt-pal" for="th-drac"><i style="color:#bd93f9;background:#bd93f9"></i>Dracula</label>
+      <label class="lt-pal" for="th-tokyo"><i style="color:#7aa2f7;background:#7aa2f7"></i>Tokyo</label>
+      <label class="lt-pal" for="th-catppuccin"><i style="color:#89b4fa;background:#89b4fa"></i>Catppuccin</label>
+      <label class="lt-pal" for="th-everforest"><i style="color:#a7c080;background:#a7c080"></i>Everforest</label>
+    </span>
+  </div>
+  <div class="lt-drawer" id="lt-drawer" hidden></div>
+</div>
+<div class="lt-toast" id="lt-toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

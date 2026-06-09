@@ -1,0 +1,10 @@
+{
+  "key": "~/.ssh/id_ed25519",
+  "wsl": { "distro": "Ubuntu" },
+  "nas": { "scheme": "http", "host": "133.9.48.110", "port": 5000, "account": "YUE_Ziran", "passwd": "REPLACE_ME", "root": "/files" },
+  "servers": [
+    { "id": "exp10", "name": "Exp10", "kind": "ssh", "host": "133.9.48.110", "port": 5510, "user": "yue_ziran", "gpuLabel": "CPU only", "home": "/home/yue_ziran", "group": "lab" },
+    { "id": "wsl", "name": "WSL", "kind": "wsl", "gpuLabel": "local", "home": "/home/you", "group": "this" },
+    { "id": "nas", "name": "NAS", "kind": "nas", "gpuLabel": "Synology DSM", "home": "/files", "group": "storage" }
+  ]
+}

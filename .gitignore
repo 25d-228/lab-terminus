@@ -1,0 +1,13 @@
+# Rust / Tauri
+/src-tauri/target/
+/src-tauri/gen/
+
+# Node (only if a frontend build step is added later)
+node_modules/
+
+# Local secrets / config
+config.local.json
+
+# OS
+.DS_Store
+Thumbs.db
