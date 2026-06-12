@@ -11,12 +11,21 @@ fn distro() -> String {
 }
 
 // CREATE_NO_WINDOW: keep wsl.exe from flashing a console window on every call.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+// creation_flags only exists on Windows; elsewhere wsl.exe is simply absent and the
+// spawn error surfaces as the host being offline.
+fn wsl_command(cmd: &str) -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("wsl.exe");
+    c.args(["-d", &distro(), "--", "bash", "-lc", cmd]);
+    #[cfg(windows)]
+    c.creation_flags(CREATE_NO_WINDOW);
+    c
+}
+
 async fn run(cmd: &str) -> Result<String, String> {
-    let out = tokio::process::Command::new("wsl.exe")
-        .args(["-d", &distro(), "--", "bash", "-lc", cmd])
-        .creation_flags(CREATE_NO_WINDOW)
+    let out = wsl_command(cmd)
         .output()
         .await
         .map_err(|e| format!("wsl.exe: {e}"))?;
@@ -26,9 +35,7 @@ async fn run(cmd: &str) -> Result<String, String> {
 // run() but surfacing the exit code and stderr — fs ops judge success by status, not
 // a stdout sentinel, and need the real diagnostic when something fails.
 async fn run_status(cmd: &str) -> Result<(i32, String, String), String> {
-    let out = tokio::process::Command::new("wsl.exe")
-        .args(["-d", &distro(), "--", "bash", "-lc", cmd])
-        .creation_flags(CREATE_NO_WINDOW)
+    let out = wsl_command(cmd)
         .output()
         .await
         .map_err(|e| format!("wsl.exe: {e}"))?;

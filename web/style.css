@@ -53,6 +53,10 @@ html{height:100%;scrollbar-width:thin;scrollbar-color:rgba(147,161,161,.4) trans
 .lt-wc{width:30px;height:24px;display:grid;place-items:center;border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;user-select:none;line-height:1}
 .lt-wc:hover{background:var(--hov);color:var(--tx)}
 .lt-wc.cl:hover{background:var(--err);color:#fff}
+/* macOS: native overlay traffic lights sit at the top-left, so hide the custom window
+   buttons and inset the brand past the lights (lt-mac flag is set in index.html). */
+html.lt-mac .lt-wins{display:none}
+html.lt-mac .lt-titlebar{padding-left:100px}
 .lt-window:has(#lt-day:checked) .on-dark{display:none}
 .lt-window:not(:has(#lt-day:checked)) .on-day{display:none}
 

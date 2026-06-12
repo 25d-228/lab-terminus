@@ -132,7 +132,7 @@ fn main() {
             });
 
             let url = format!("http://127.0.0.1:{port}/");
-            tauri::WebviewWindowBuilder::new(
+            let mut wb = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::External(url.parse().expect("url")),
@@ -140,7 +140,6 @@ fn main() {
             .title("Lab Terminus")
             .inner_size(1200.0, 800.0)
             .min_inner_size(900.0, 600.0)
-            .decorations(false)
             .resizable(true)
             // let HTML5 drag-and-drop (drop files onto Explorer to upload) reach the page —
             // Tauri's own drag-drop handler would swallow it on Windows
@@ -155,8 +154,27 @@ fn main() {
                     eprintln!("[download] finished ok={success} path={path:?}");
                 }
                 true
-            })
-            .build()?;
+            });
+
+            // Window chrome differs per platform. macOS: keep the native title bar but make it
+            // an overlay, so the real "traffic light" buttons sit at the top-left (the Mac way)
+            // with the app content drawn underneath; the native title text is hidden since we
+            // draw our own brand. The frontend adds an `lt-mac` class that hides the custom HTML
+            // window buttons and insets the brand past the lights. Windows/Linux stay frameless
+            // and keep the custom buttons.
+            #[cfg(target_os = "macos")]
+            {
+                wb = wb
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true)
+                    .traffic_light_position(tauri::LogicalPosition::new(14.0, 22.0));
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                wb = wb.decorations(false);
+            }
+
+            wb.build()?;
 
             // system tray: close-to-tray lives here
             let show = MenuItem::with_id(app, "show", "Show Lab Terminus", true, None::<&str>)?;

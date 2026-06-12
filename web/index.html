@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lab Terminus</title>
+<!-- macOS uses native overlay traffic lights (top-left); flag the document so CSS hides the
+     custom window buttons and insets the brand. Set before paint to avoid a flash. -->
+<script>if(/mac/i.test(navigator.platform||navigator.userAgent||''))document.documentElement.classList.add('lt-mac');</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/devicon@2.16.0/devicon.min.css">
 <link rel="stylesheet" href="style.css">
