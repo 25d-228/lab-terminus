@@ -23,6 +23,22 @@ async fn run(cmd: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+// run() but surfacing the exit code and stderr — fs ops judge success by status, not
+// a stdout sentinel, and need the real diagnostic when something fails.
+async fn run_status(cmd: &str) -> Result<(i32, String, String), String> {
+    let out = tokio::process::Command::new("wsl.exe")
+        .args(["-d", &distro(), "--", "bash", "-lc", cmd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .await
+        .map_err(|e| format!("wsl.exe: {e}"))?;
+    Ok((
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
 pub async fn status(s: &Server) -> serde_json::Value {
     match run(ssh::GATHER).await {
         Ok(out) => {
@@ -36,7 +52,7 @@ pub async fn status(s: &Server) -> serde_json::Value {
     }
 }
 
-pub async fn ls_dir(s: &Server, path: Option<&str>) -> serde_json::Value {
+pub async fn ls_dir(_s: &Server, path: Option<&str>) -> serde_json::Value {
     let p = match path {
         Some(p) if !p.is_empty() => p.to_string(),
         _ => {
@@ -49,15 +65,20 @@ pub async fn ls_dir(s: &Server, path: Option<&str>) -> serde_json::Value {
             }
         }
     };
+    // NUL-terminated records + at-most-4-way split: filenames containing tabs or
+    // newlines stay intact (the name is the final field, so embedded tabs survive).
     let cmd = format!(
-        "LANG=C find {} -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%T@\\t%f\\n'",
+        "LANG=C find {} -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%T@\\t%f\\0'",
         ssh::shell_quote(&p)
     );
     match run(&cmd).await {
         Ok(out) => {
             let mut entries = Vec::new();
-            for ln in out.lines() {
-                let c: Vec<&str> = ln.split('\t').collect();
+            for rec in out.split('\0') {
+                if rec.is_empty() {
+                    continue;
+                }
+                let c: Vec<&str> = rec.splitn(4, '\t').collect();
                 if c.len() >= 4 {
                     entries.push(serde_json::json!({
                         "name": c[3],
@@ -71,6 +92,32 @@ pub async fn ls_dir(s: &Server, path: Option<&str>) -> serde_json::Value {
             serde_json::json!({"path": p, "parent": ssh::parent_of(&p), "entries": entries})
         }
         Err(e) => serde_json::json!({"path": p, "parent": ssh::parent_of(&p), "entries": [], "error": e}),
+    }
+}
+
+pub async fn fs_op(_s: &Server, op: &str, path: &str, to: Option<&str>) -> Result<(), String> {
+    if path.is_empty() || path == "/" {
+        return Err("refusing to operate on '/'".into());
+    }
+    let q = ssh::shell_quote(path);
+    // exit 17 == EEXIST, our "already exists" signal; any other nonzero is a real failure
+    // whose stderr we surface verbatim. No -p on mkdir, so an existing name errors cleanly.
+    let cmd = match op {
+        "mkdir" => format!("if [ -e {q} ]; then exit 17; fi; mkdir -- {q}"),
+        "touch" => format!("if [ -e {q} ]; then exit 17; fi; touch -- {q}"),
+        "rename" => {
+            let t = ssh::shell_quote(to.ok_or("missing new name")?);
+            format!("if [ -e {t} ]; then exit 17; fi; mv -- {q} {t}")
+        }
+        "delete" => format!("rm -rf -- {q}"),
+        _ => return Err(format!("unknown op {op}")),
+    };
+    let (code, _out, err) = run_status(&cmd).await?;
+    match code {
+        0 => Ok(()),
+        17 => Err("already exists".into()),
+        _ if err.trim().is_empty() => Err(format!("failed (exit {code})")),
+        _ => Err(err.trim().to_string()),
     }
 }
 

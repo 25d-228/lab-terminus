@@ -62,6 +62,17 @@ fn key_path() -> std::path::PathBuf {
 }
 
 pub(crate) async fn connect(s: &Server) -> Result<Handle<Client>, String> {
+    // one retry: per-request connects occasionally trip sshd connection throttling
+    match connect_once(s).await {
+        Ok(h) => Ok(h),
+        Err(_) => {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            connect_once(s).await
+        }
+    }
+}
+
+async fn connect_once(s: &Server) -> Result<Handle<Client>, String> {
     let host = s.host.clone().ok_or("no host")?;
     let port = s.port.unwrap_or(22);
     let user = s.user.clone().ok_or("no user")?;
@@ -104,6 +115,35 @@ async fn exec_raw(handle: &Handle<Client>, cmd: &str) -> Result<String, String> 
     };
     match tokio::time::timeout(EXEC_TIMEOUT, read).await {
         Ok(out) => Ok(String::from_utf8_lossy(&out).into_owned()),
+        Err(_) => Err("command timed out".into()),
+    }
+}
+
+// Like exec_raw but keeps stdout/stderr separate and returns the exit code, so callers
+// can judge success by status instead of scraping a sentinel string out of merged output.
+async fn exec_status(handle: &Handle<Client>, cmd: &str) -> Result<(u32, String, String), String> {
+    let mut ch = handle.channel_open_session().await.map_err(es)?;
+    ch.exec(true, cmd).await.map_err(es)?;
+    let read = async move {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut code: u32 = 0;
+        loop {
+            match ch.wait().await {
+                Some(ChannelMsg::Data { ref data }) => out.extend_from_slice(&data[..]),
+                Some(ChannelMsg::ExtendedData { ref data, .. }) => err.extend_from_slice(&data[..]),
+                Some(ChannelMsg::ExitStatus { exit_status }) => code = exit_status,
+                Some(_) => {}
+                None => break,
+            }
+        }
+        (
+            code,
+            String::from_utf8_lossy(&out).into_owned(),
+            String::from_utf8_lossy(&err).into_owned(),
+        )
+    };
+    match tokio::time::timeout(EXEC_TIMEOUT, read).await {
+        Ok(t) => Ok(t),
         Err(_) => Err("command timed out".into()),
     }
 }
@@ -360,6 +400,67 @@ pub async fn ls_dir(s: &Server, path: Option<&str>) -> serde_json::Value {
             let p = path.unwrap_or("/").to_string();
             serde_json::json!({"path": p, "parent": parent_of(&p), "entries": [], "error": e})
         }
+    }
+}
+
+// ---------------------------------------------------------------- fs ops (Explorer CRUD)
+pub async fn fs_op(s: &Server, op: &str, path: &str, to: Option<&str>) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    if path.is_empty() || path == "/" {
+        return Err("refusing to operate on '/'".into());
+    }
+    let handle = connect(s).await?;
+    let ch = handle.channel_open_session().await.map_err(es)?;
+    ch.request_subsystem(true, "sftp").await.map_err(es)?;
+    let sftp = russh_sftp::client::SftpSession::new(ch.into_stream())
+        .await
+        .map_err(es)?;
+    match op {
+        "mkdir" => {
+            // symlink_metadata (LSTAT) so an existing symlink/file is caught too
+            if sftp.symlink_metadata(path).await.is_ok() {
+                return Err("already exists".into());
+            }
+            sftp.create_dir(path).await.map_err(es)
+        }
+        "touch" => {
+            if sftp.symlink_metadata(path).await.is_ok() {
+                return Err("already exists".into());
+            }
+            let mut f = sftp.create(path).await.map_err(es)?;
+            f.shutdown().await.map_err(es)
+        }
+        "rename" => {
+            let to = to.ok_or("missing new name")?;
+            if sftp.symlink_metadata(to).await.is_ok() {
+                return Err("target already exists".into());
+            }
+            sftp.rename(path, to).await.map_err(es)
+        }
+        "delete" => {
+            // LSTAT, not STAT: a dangling symlink (which the listing shows) must be
+            // removable, and a symlink-to-dir must be unlinked, not recursed into.
+            let meta = sftp
+                .symlink_metadata(path)
+                .await
+                .map_err(|_| "no such file".to_string())?;
+            if meta.is_dir() {
+                // recursive delete in one round trip; success judged by exit status,
+                // not a sentinel (rm's stderr could otherwise contain the marker text).
+                let (code, _out, err) =
+                    exec_status(&handle, &format!("rm -rf -- {}", shell_quote(path))).await?;
+                if code == 0 {
+                    Ok(())
+                } else if err.trim().is_empty() {
+                    Err(format!("delete failed (exit {code})"))
+                } else {
+                    Err(err.trim().to_string())
+                }
+            } else {
+                sftp.remove_file(path).await.map_err(es)
+            }
+        }
+        _ => Err(format!("unknown op {op}")),
     }
 }
 

@@ -1,7 +1,7 @@
 (function () {
 "use strict";
 const $ = id => document.getElementById(id);
-function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML.replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function bytes(n){if(n==null||n<0||isNaN(n))return '';const u=['B','KB','MB','GB','TB','PB'];let i=0,v=n;while(v>=1024&&i<u.length-1){v/=1024;i++;}return (v>=10||i===0?Math.round(v):v.toFixed(1))+' '+u[i];}
 function mib(n){return bytes((n||0)*1048576);}
 function pct(u,s){return s>0?Math.round(u/s*100):0;}
@@ -9,7 +9,7 @@ function ago(ep){if(!ep)return '';let s=Math.floor(Date.now()/1000-ep);if(s<0)re
 function gpuClass(u){return u>=70?'':u>=30?'mid':'low';}
 function utilColor(u){const p=Math.max(0,Math.min(100,Math.round(u)));return p<=50?`color-mix(in srgb,var(--ok),var(--warn) ${p*2}%)`:`color-mix(in srgb,var(--warn),var(--hot) ${(p-50)*2}%)`;}
 function parentOf(p){if(!p||p==='/')return '/';const q=p.replace(/\/+$/,'');const i=q.lastIndexOf('/');return i>0?q.slice(0,i):'/';}
-async function api(p,opts){const r=await fetch(p,opts);if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}
+async function api(p,opts){const r=await fetch(p,opts);if(!r.ok){let t='';try{t=(await r.text()).slice(0,140);}catch(e){}throw new Error('HTTP '+r.status+(t?' — '+t:''));}return r.json();}
 
 let SERVERS=[], byId={}, FOLDERS=[], SIDX={}, _modal={mode:'server',folder:null}, _sendto=null;
 const FLEET={};
@@ -47,7 +47,9 @@ function renderSide(){
  });
  $('lt-side').innerHTML=h;
 }
-async function refreshRegistry(){try{const[sv,fo]=await Promise.all([api('/api/servers'),api('/api/folders')]);SERVERS=sv;FOLDERS=fo;byId=Object.fromEntries(SERVERS.map(s=>[s.id,s]));SIDX=Object.fromEntries(SERVERS.map((s,i)=>[s.id,i]));renderSide();}catch(e){}}
+async function refreshRegistry(){try{const[sv,fo]=await Promise.all([api('/api/servers'),api('/api/folders')]);SERVERS=sv;FOLDERS=fo;byId=Object.fromEntries(SERVERS.map(s=>[s.id,s]));SIDX=Object.fromEntries(SERVERS.map((s,i)=>[s.id,i]));
+ if(ST.active&&!byId[ST.active]){ST.view='fleet';ST.active=SERVERS[0]&&SERVERS[0].id;ST.sel=null;ST.listing=null;renderAll();}  // the open server was removed (e.g. config hand-edit)
+ renderSide();}catch(e){}}
 /* add server / folder modal */
 function openAddModal(mode,folder){_modal={mode:mode||'server',folder:folder||(FOLDERS[0]&&FOLDERS[0].key)||'lab'};let el=$('lt-modal');if(!el){el=document.createElement('div');el.id='lt-modal';el.className='lt-modal';(document.querySelector('.lt-window')||document.body).appendChild(el);}renderModal();}
 function closeModal(){const el=$('lt-modal');if(el)el.remove();}
@@ -61,13 +63,43 @@ function showCtx(x,y,items){closeCtx();const m=document.createElement('div');m.i
  m.innerHTML=items.map((it,i)=>`<div class="lt-ctx-i${it.danger?' danger':''}" data-ci="${i}">${esc(it.label)}</div>`).join('');
  (document.querySelector('.lt-window')||document.body).appendChild(m);
  m.style.left=Math.min(x,window.innerWidth-198)+'px';m.style.top=Math.min(y,window.innerHeight-14-items.length*34)+'px';
- m.addEventListener('click',ev=>{const t=ev.target.closest('[data-ci]');if(!t)return;const it=items[+t.getAttribute('data-ci')];closeCtx();if(it&&it.fn)it.fn();});
+ m.addEventListener('click',ev=>{const t=ev.target.closest('[data-ci]');if(!t)return;const it=items[+t.getAttribute('data-ci')];closeCtx();off();if(it&&it.fn)it.fn();});
  const off=()=>{document.removeEventListener('mousedown',close,true);document.removeEventListener('keydown',esckey,true);};
  const close=ev=>{if(!ev.target.closest('#lt-ctx')){closeCtx();off();}};
  const esckey=ev=>{if(ev.key==='Escape'){closeCtx();off();}};
  setTimeout(()=>{document.addEventListener('mousedown',close,true);document.addEventListener('keydown',esckey,true);},0);
 }
 document.addEventListener('contextmenu',e=>{
+ /* Explorer rows: full file/folder CRUD */
+ const fr=e.target.closest('.lt-fr');
+ if(fr&&ST.view==='server'&&ST.tab==='explorer'){e.preventDefault();
+  const name=fr.getAttribute('data-name'),dir=fr.getAttribute('data-dir')==='1';
+  const cur=ST.cwd[ST.active]||'/',full=joinp(cur,name),s=byId[ST.active];
+  if(!dir){const r=((ST.listing&&ST.listing.entries)||[]).find(x=>x.name===name);ST.sel=r?{name:r.name,dir:false,size:r.size,mtime:r.mtime}:{name,dir:false};const ft0=document.querySelector('.lt-ftable'),sc=ft0?ft0.scrollTop:0;renderExplorer();const ft1=document.querySelector('.lt-ftable');if(ft1)ft1.scrollTop=sc;}
+  const items=[];
+  if(dir)items.push({label:'Open',fn:()=>{ST.cwd[ST.active]=full;(ST.navFwd||(ST.navFwd={}))[ST.active]=[];ST.sel=null;ST.filter='';loadDir(ST.active,full);}});
+  else if(s&&(s.kind==='ssh'||s.kind==='nas')){
+   items.push({label:'Download',fn:()=>doDownload(ST.active,full)});
+   items.push({label:'Send to…',fn:()=>openSendTo({sid:ST.active,path:full,name,size:(ST.sel&&ST.sel.size)||0})});
+  }
+  items.push({label:'Rename…',fn:()=>promptM('Rename '+(dir?'folder':'file'),name,nv=>{const er=validName(nv);if(er)return toast(er);if(nv!==name)fsOp('rename',full,joinp(cur,nv));})});
+  items.push({label:'Copy path',fn:()=>copyText(full)});
+  items.push({label:dir?'Delete folder':'Delete file',danger:true,fn:()=>confirmM(`Delete ${dir?'folder':'file'} <b style="color:var(--tx)">${esc(name)}</b>${dir?' <u>and everything inside it</u>':''}?<br>This cannot be undone.`,()=>fsOp('delete',full))});
+  showCtx(e.clientX,e.clientY,items);return;
+ }
+ /* Explorer empty space: create things here */
+ const ft=e.target.closest('.lt-ftable');
+ if(ft&&ST.view==='server'&&ST.tab==='explorer'){e.preventDefault();
+  const L=ST.listing,cur=ST.cwd[ST.active],s=byId[ST.active];
+  if(!L||L.loading||L.error||cur==null){showCtx(e.clientX,e.clientY,[{label:'Refresh',fn:()=>loadDir(ST.active,cur)}]);return;}
+  const items=[
+   {label:'New file…',fn:()=>promptM('New file name','',nv=>{const er=validName(nv);if(er)return toast(er);fsOp('touch',joinp(cur,nv));})},
+   {label:'New folder…',fn:()=>promptM('New folder name','',nv=>{const er=validName(nv);if(er)return toast(er);fsOp('mkdir',joinp(cur,nv));})}
+  ];
+  if(s&&s.kind==='ssh')items.push({label:'Upload files here…',fn:()=>pickUpload()});
+  items.push({label:'Refresh',fn:()=>loadDir(ST.active,cur)});
+  showCtx(e.clientX,e.clientY,items);return;
+ }
  if(!e.target.closest('.lt-side'))return;
  const sv=e.target.closest('[data-sv]');
  if(sv){e.preventDefault();const id=sv.getAttribute('data-sv'),s=byId[id];showCtx(e.clientX,e.clientY,[{label:'Edit server…',fn:()=>openEditServer(id)},...(s&&s.kind!=='nas'?[{label:'Open terminal',fn:()=>openServer(id,'terminal')}]:[]),{label:'Remove server',danger:true,fn:()=>removeServer(id)}]);return;}
@@ -85,7 +117,7 @@ function renderModal(){const el=$('lt-modal');if(!el)return;const m=_modal.mode,
  el.innerHTML=`<div class="lt-modal-card"><div class="lt-modal-h">${head}<span class="lt-modal-x" data-mclose="1">✕</span></div><div class="lt-modal-b">${body}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-mclose="1">Cancel</span><span class="lt-btn" data-msubmit="1">${btn}</span></div></div>`;
  const fi=el.querySelector('.lt-f-in');if(fi)fi.focus();
 }
-async function submitAdd(){try{
+async function submitAdd(){if(submitAdd._busy)return;submitAdd._busy=true;try{
  const ed=_modal.editId;
  if(_modal.mode==='folder'){const t=(($('m-fname')||{}).value||'').trim();if(!t){toast('Folder name required');return;}
   if(ed){await api('/api/folders/'+ed,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})});closeModal();await refreshRegistry();renderAll();toast('Folder renamed');return;}
@@ -97,7 +129,7 @@ async function submitAdd(){try{
  const s=await api('/api/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
  ST.collapsed[group]=false;try{localStorage.setItem('lt-collapsed',JSON.stringify(ST.collapsed));}catch(e){}
  closeModal();await refreshRegistry();toast('Server “'+((s&&s.name)||name)+'” added');
-}catch(e){toast('Save failed: '+e);}}
+}catch(e){toast('Save failed: '+e);}finally{submitAdd._busy=false;}}
 
 /* ---------------- header + tabs ---------------- */
 function renderHeadTabs(){
@@ -194,6 +226,23 @@ function prevHtml(id){const s=byId[id];
  const ext=(r.name.split('.').pop()||'').toLowerCase();const icon=({pt:'◆',pth:'◆',ckpt:'◆',yaml:'⚙',yml:'⚙',json:'⚙',log:'▦',jsonl:'▦',sh:'▶',csh:'▶',py:'⌘',bib:'❡',pdf:'▤',php:'⟨⟩',dat:'▦'})[ext]||'▢';
  return `<aside class="lt-prev"><div class="pic">${icon}</div><h4>${esc(r.name)}</h4><div class="meta">${bytes(r.size)} · ${esc(ext||'file')}<br>${r.mtime?'modified '+ago(r.mtime):''}<br>${esc(s.name)}:${esc(ST.cwd[id])}/</div><span class="lt-act pri" data-act="sendto">Send to…</span><span class="lt-act" data-act="download">Download</span><span class="lt-act" data-act="copypath">Copy path</span></aside>`;
 }
+
+/* ---------------- explorer file CRUD (context menu + dialogs) ---------------- */
+function joinp(dir,name){return (dir==='/'||dir===''||dir==null?'':dir)+'/'+name;}
+function validName(n){n=(n||'').trim();if(!n)return 'Name cannot be empty';if(n==='.'||n==='..')return 'Invalid name';if(n.indexOf('/')>=0)return 'Name can’t contain “/”';if(/[ -]/.test(n))return 'Invalid name';return null;}
+async function fsOp(op,path,to){const sid=ST.active,cwd=ST.cwd[sid];try{await api('/api/'+sid+'/fs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op,path,to})});toast({mkdir:'Folder created',touch:'File created',rename:'Renamed',delete:'Deleted'}[op]||'Done');if(ST.active===sid){ST.sel=null;loadDir(sid,cwd);}}catch(e){toast('Failed: '+(e.message||e));}}
+function copyText(t){if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(()=>toast('Copied — '+t),()=>toast(t));else toast(t);}
+function _dlg(html){let el=$('lt-prompt');if(el)el.remove();el=document.createElement('div');el.id='lt-prompt';el.className='lt-modal';el.innerHTML=html;(document.querySelector('.lt-window')||document.body).appendChild(el);return el;}
+function promptM(title,initial,cb){const el=_dlg(`<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">${esc(title)}</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b"><input class="lt-f-in" id="lt-prompt-in" value="${esc(initial||'')}" spellcheck="false"></div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1">OK</span></div></div>`);
+ const inp=$('lt-prompt-in');inp.focus();if(initial){const i=initial.lastIndexOf('.');inp.setSelectionRange(0,i>0?i:initial.length);}
+ const done=ok=>{const v=inp.value.trim();el.remove();if(ok&&v)cb(v);};
+ el.addEventListener('click',ev=>{if(ev.target===el||ev.target.closest('[data-pclose]'))done(false);else if(ev.target.closest('[data-pok]'))done(true);});
+ inp.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();done(true);}else if(ev.key==='Escape')done(false);});}
+function confirmM(html,cb){const el=_dlg(`<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">Are you sure?</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b" style="font-size:12.5px;color:var(--tx2);line-height:1.65">${html}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1" style="background:var(--err);border-color:var(--err)">Delete</span></div></div>`);
+ const close=()=>{el.remove();document.removeEventListener('keydown',key,true);};
+ const key=ev=>{if(ev.key==='Escape'){ev.preventDefault();close();}else if(ev.key==='Enter'){ev.preventDefault();close();cb();}};
+ el.addEventListener('click',ev=>{if(ev.target===el||ev.target.closest('[data-pclose]'))close();else if(ev.target.closest('[data-pok]')){close();cb();}});
+ document.addEventListener('keydown',key,true);}
 
 /* ---------------- transfers (queue drawer + actions) ---------------- */
 function xfer(){return ST.xfer||(ST.xfer={open:false,jobs:[],timer:null});}
@@ -414,7 +463,7 @@ document.addEventListener('click',e=>{
   else if(a==='refresh'){loadDir(ST.active,ST.cwd[ST.active]);toast('Refreshing…');}
   else if(a==='open'&&ST.sel){const cur=ST.cwd[ST.active];ST.cwd[ST.active]=(cur==='/'?'':cur)+'/'+ST.sel.name;(ST.navFwd||(ST.navFwd={}))[ST.active]=[];ST.sel=null;loadDir(ST.active,ST.cwd[ST.active]);}
   else if(a==='newterm'){openServer(ST.active,'terminal');}
-  else if(a==='copypath'&&ST.sel){toast('Copied — '+byId[ST.active].name+':'+ST.cwd[ST.active]+'/'+ST.sel.name);}
+  else if(a==='copypath'&&ST.sel){copyText(ST.cwd[ST.active]+'/'+ST.sel.name);}
   else if(a==='download'&&ST.sel){const cur=ST.cwd[ST.active];doDownload(ST.active,(cur==='/'?'':cur)+'/'+ST.sel.name);}
   else if(a==='sendto'&&ST.sel){const cur=ST.cwd[ST.active];openSendTo({sid:ST.active,path:(cur==='/'?'':cur)+'/'+ST.sel.name,name:ST.sel.name,size:ST.sel.size||0});}
   else if(a==='upload'){pickUpload();}
@@ -439,7 +488,10 @@ document.addEventListener('keydown',e=>{
 /* ---------------- init + polling ---------------- */
 function applyTheme(){const pal=localStorage.getItem('lt-pal')||'sol',mode=localStorage.getItem('lt-mode')||'day';const p=$('th-'+pal);if(p)p.checked=true;$('lt-day').checked=(mode!=='night');}
 async function poll(){
+ if(document.hidden)return;  // hidden to tray / background tab: don't hammer SSH for an invisible UI
  try{const f=await api('/api/fleet');f.servers.forEach(s=>{FLEET[s.id]=s;});
+  if(f.rev!==undefined&&ST.cfgRev!==undefined&&f.rev!==ST.cfgRev){await refreshRegistry();}  // config file edited → re-pull registry
+  if(f.rev!==undefined)ST.cfgRev=f.rev;
   const on=f.servers.filter(s=>s.online!==false).length;$('lt-conn').textContent=`${on}/${f.servers.length} hosts online`;
   renderSide();
   if(ST.view==='fleet'){if(document.activeElement&&document.activeElement.id==='lt-ovsearch')return;viewFleet();}
@@ -454,6 +506,7 @@ async function init(){
  byId=Object.fromEntries(SERVERS.map(s=>[s.id,s]));SIDX=Object.fromEntries(SERVERS.map((s,i)=>[s.id,i]));
  ST.active=SERVERS[0]&&SERVERS[0].id;
  renderAll();poll();setInterval(poll,5000);startXfer();
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});  // fresh data the moment we're shown again
 }
 /* frameless window controls (Tauri global API) */
 document.addEventListener('click',e=>{const wc=e.target.closest('[data-wc]');if(!wc)return;const T=window.__TAURI__;if(T&&T.window){const w=T.window.getCurrentWindow();const a=wc.getAttribute('data-wc');if(a==='min')w.minimize();else if(a==='max')w.toggleMaximize();else if(a==='close')w.close();}});

@@ -4,11 +4,25 @@ use std::sync::Mutex;
 use crate::config::{self, Server};
 use crate::ssh::{es, offline, parent_of};
 
-static SID: Mutex<Option<String>> = Mutex::new(None);
+// (base url, sid) of the DSM endpoint that actually answered — probed at login.
+static SESSION: Mutex<Option<(String, String)>> = Mutex::new(None);
 
-fn base() -> Result<String, String> {
-    let n = config::get().nas.as_ref().ok_or("no nas config")?;
-    Ok(format!("{}://{}:{}/webapi", n.scheme, n.host, n.port))
+fn http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .unwrap_or_default()
+}
+
+/// Candidate DSM base urls: the primary host, then the optional LAN host (NAT hairpin).
+fn bases() -> Result<Vec<String>, String> {
+    let cfg = config::get();
+    let n = cfg.nas.as_ref().ok_or("no nas config")?;
+    let mut v = vec![format!("{}://{}:{}/webapi", n.scheme, n.host, n.port)];
+    if let Some(hl) = &n.host_local {
+        v.push(format!("{}://{}:{}/webapi", n.scheme, hl, n.port));
+    }
+    Ok(v)
 }
 
 fn coerce_i64(v: &serde_json::Value) -> i64 {
@@ -18,36 +32,45 @@ fn coerce_i64(v: &serde_json::Value) -> i64 {
         .unwrap_or(0)
 }
 
-async fn login() -> Result<String, String> {
-    let n = config::get().nas.as_ref().ok_or("no nas config")?;
-    let url = format!("{}/auth.cgi", base()?);
-    let r: serde_json::Value = reqwest::Client::new()
-        .get(&url)
-        .query(&[
-            ("api", "SYNO.API.Auth"),
-            ("version", "3"),
-            ("method", "login"),
-            ("account", n.account.as_str()),
-            ("passwd", n.passwd.as_str()),
-            ("session", "FileStation"),
-            ("format", "sid"),
-        ])
-        .send()
-        .await
-        .map_err(es)?
-        .json()
-        .await
-        .map_err(es)?;
-    if r["success"].as_bool() == Some(true) {
-        let sid = r["data"]["sid"]
-            .as_str()
-            .ok_or("NAS login: no sid")?
-            .to_string();
-        *SID.lock().unwrap() = Some(sid.clone());
-        Ok(sid)
-    } else {
-        Err(format!("NAS login failed: {}", r["error"]))
+async fn login() -> Result<(String, String), String> {
+    let cfg = config::get();
+    let n = cfg.nas.as_ref().ok_or("no nas config")?.clone();
+    let mut last = String::from("no nas endpoints");
+    for base in bases()? {
+        let r: Result<serde_json::Value, String> = async {
+            http()
+                .get(format!("{base}/auth.cgi"))
+                .query(&[
+                    ("api", "SYNO.API.Auth"),
+                    ("version", "3"),
+                    ("method", "login"),
+                    ("account", n.account.as_str()),
+                    ("passwd", n.passwd.as_str()),
+                    ("session", "FileStation"),
+                    ("format", "sid"),
+                ])
+                .send()
+                .await
+                .map_err(es)?
+                .json()
+                .await
+                .map_err(es)
+        }
+        .await;
+        match r {
+            Ok(r) if r["success"].as_bool() == Some(true) => {
+                let sid = r["data"]["sid"]
+                    .as_str()
+                    .ok_or("NAS login: no sid")?
+                    .to_string();
+                *SESSION.lock().unwrap() = Some((base.clone(), sid.clone()));
+                return Ok((base, sid));
+            }
+            Ok(r) => last = format!("NAS login failed: {}", r["error"]),
+            Err(e) => last = e,
+        }
     }
+    Err(last)
 }
 
 async fn api_call(
@@ -56,15 +79,14 @@ async fn api_call(
     version: &str,
     extra: &[(&str, &str)],
 ) -> Result<serde_json::Value, String> {
-    // Clone the cached sid and drop the guard BEFORE any .await (a std Mutex guard held
-    // across await makes the future !Send, which axum handlers reject).
-    let cached = SID.lock().unwrap().clone();
-    let mut sid = match cached {
+    // Clone the cached session and drop the guard BEFORE any .await (a std Mutex guard
+    // held across await makes the future !Send, which axum handlers reject).
+    let cached = SESSION.lock().unwrap().clone();
+    let (mut base, mut sid) = match cached {
         Some(s) => s,
         None => login().await?,
     };
     for attempt in 0..2 {
-        let url = format!("{}/entry.cgi", base()?);
         let mut q: Vec<(&str, &str)> = vec![
             ("api", api),
             ("version", version),
@@ -72,26 +94,109 @@ async fn api_call(
             ("_sid", sid.as_str()),
         ];
         q.extend_from_slice(extra);
-        let r: serde_json::Value = reqwest::Client::new()
-            .get(&url)
+        let resp = http()
+            .get(format!("{base}/entry.cgi"))
             .query(&q)
             .send()
-            .await
-            .map_err(es)?
-            .json()
-            .await
-            .map_err(es)?;
+            .await;
+        let r: serde_json::Value = match resp {
+            Ok(resp) => resp.json().await.map_err(es)?,
+            Err(e) if attempt == 0 => {
+                // transport failure (e.g. switched networks) — re-probe endpoints once
+                eprintln!("[nas] {e} — re-probing endpoints");
+                (base, sid) = login().await?;
+                continue;
+            }
+            Err(e) => return Err(es(e)),
+        };
         if r["success"].as_bool() == Some(true) {
             return Ok(r["data"].clone());
         }
         let code = r["error"]["code"].as_i64().unwrap_or(0);
         if matches!(code, 105 | 106 | 119) && attempt == 0 {
-            sid = login().await?;
+            (base, sid) = login().await?;
             continue;
         }
         return Err(format!("NAS {api}.{method} error: {}", r["error"]));
     }
     Err("NAS API failed".into())
+}
+
+/// Stream a file off the NAS (DSM FileStation Download). Returns the raw HTTP response.
+pub async fn download(path: &str) -> Result<reqwest::Response, String> {
+    let cached = SESSION.lock().unwrap().clone();
+    let (base, sid) = match cached {
+        Some(s) => s,
+        None => login().await?,
+    };
+    for attempt in 0..2 {
+        let r = http()
+            .get(format!("{base}/entry.cgi"))
+            .query(&[
+                ("api", "SYNO.FileStation.Download"),
+                ("version", "2"),
+                ("method", "download"),
+                ("path", path),
+                ("mode", "download"),
+                ("_sid", sid.as_str()),
+            ])
+            .send()
+            .await;
+        match r {
+            Ok(resp) if resp.status().is_success() => return Ok(resp),
+            Ok(resp) => return Err(format!("NAS download: HTTP {}", resp.status())),
+            Err(e) if attempt == 0 => {
+                eprintln!("[nas] {e} — re-probing endpoints");
+                login().await?;
+            }
+            Err(e) => return Err(es(e)),
+        }
+    }
+    Err("NAS download failed".into())
+}
+
+/// Upload a stream to a NAS folder (DSM FileStation Upload, multipart).
+/// `len` must be known when streaming — DSM rejects chunked transfer-encoding,
+/// so without a length the request never completes.
+pub async fn upload(
+    dir: &str,
+    name: &str,
+    body: reqwest::Body,
+    len: u64,
+    overwrite: bool,
+) -> Result<(), String> {
+    let cached = SESSION.lock().unwrap().clone();
+    let (base, sid) = match cached {
+        Some(s) => s,
+        None => login().await?,
+    };
+    let part =
+        reqwest::multipart::Part::stream_with_length(body, len).file_name(name.to_string());
+    let form = reqwest::multipart::Form::new()
+        .text("api", "SYNO.FileStation.Upload")
+        .text("version", "2")
+        .text("method", "upload")
+        .text("path", dir.to_string())
+        .text("create_parents", "true")
+        .text("overwrite", if overwrite { "true" } else { "false" })
+        .part("file", part);
+    let r: serde_json::Value = reqwest::Client::builder()
+        .build()
+        .map_err(es)?
+        .post(format!("{base}/entry.cgi"))
+        .query(&[("_sid", sid.as_str())])
+        .multipart(form)
+        .send()
+        .await
+        .map_err(es)?
+        .json()
+        .await
+        .map_err(es)?;
+    if r["success"].as_bool() == Some(true) {
+        Ok(())
+    } else {
+        Err(format!("NAS upload error: {}", r["error"]))
+    }
 }
 
 pub async fn status(s: &Server) -> serde_json::Value {
@@ -123,6 +228,106 @@ pub async fn status(s: &Server) -> serde_json::Value {
             })
         }
         Err(e) => offline(s, &e),
+    }
+}
+
+fn split_parent(path: &str) -> Result<(&str, &str), String> {
+    let p = path.trim_end_matches('/');
+    match p.rfind('/') {
+        Some(0) | None => Err("path needs a parent folder".into()),
+        Some(i) => Ok((&p[..i], &p[i + 1..])),
+    }
+}
+
+// DSM FileStation treats `path`/`name` as a comma-separated list; a literal comma in a
+// filename would split into several targets (e.g. a Delete hitting unintended siblings).
+// Wrapping the value in double quotes makes DSM read it as one element.
+fn nas_arg(p: &str) -> String {
+    if p.contains(',') || p.contains('"') {
+        format!("\"{}\"", p.replace('"', "\\\""))
+    } else {
+        p.to_string()
+    }
+}
+
+pub async fn fs_op(_s: &Server, op: &str, path: &str, to: Option<&str>) -> Result<(), String> {
+    if path.is_empty() || path == "/" {
+        return Err("refusing to operate on '/'".into());
+    }
+    match op {
+        "mkdir" => {
+            let (parent, name) = split_parent(path)?;
+            api_call(
+                "SYNO.FileStation.CreateFolder",
+                "create",
+                "2",
+                &[
+                    ("folder_path", nas_arg(parent).as_str()),
+                    ("name", name),
+                    ("force_parent", "false"),
+                ],
+            )
+            .await
+            .map(|_| ())
+        }
+        "touch" => {
+            let (parent, name) = split_parent(path)?;
+            // DSM's overwrite=false means SKIP (success), so check existence ourselves
+            if let Ok(d) = api_call(
+                "SYNO.FileStation.List",
+                "getinfo",
+                "2",
+                &[("path", nas_arg(path).as_str())],
+            )
+            .await
+            {
+                if d["files"][0]["isdir"].is_boolean() {
+                    return Err("already exists".into());
+                }
+            }
+            upload(parent, name, reqwest::Body::from(Vec::new()), 0, false).await
+        }
+        "rename" => {
+            let to = to.ok_or("missing new name")?;
+            let (_, new_name) = split_parent(to)?;
+            api_call(
+                "SYNO.FileStation.Rename",
+                "rename",
+                "2",
+                &[("path", nas_arg(path).as_str()), ("name", new_name)],
+            )
+            .await
+            .map(|_| ())
+        }
+        "delete" => {
+            let data = api_call(
+                "SYNO.FileStation.Delete",
+                "start",
+                "2",
+                &[
+                    ("path", nas_arg(path).as_str()),
+                    ("accurate_progress", "false"),
+                ],
+            )
+            .await?;
+            let taskid = data["taskid"].as_str().unwrap_or_default().to_string();
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // poll version must match the start call (2) — some DSM builds reject v1
+                let st = api_call(
+                    "SYNO.FileStation.Delete",
+                    "status",
+                    "2",
+                    &[("taskid", taskid.as_str())],
+                )
+                .await?;
+                if st["finished"].as_bool() == Some(true) {
+                    return Ok(());
+                }
+            }
+            Err("delete timed out".into())
+        }
+        _ => Err(format!("unknown op {op}")),
     }
 }
 
