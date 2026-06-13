@@ -17,12 +17,12 @@ fn http() -> reqwest::Client {
 /// Candidate DSM base urls: the primary host, then the optional LAN host (NAT hairpin).
 fn bases() -> Result<Vec<String>, String> {
     let cfg = config::get();
-    let n = cfg.nas.as_ref().ok_or("no nas config")?;
-    let mut v = vec![format!("{}://{}:{}/webapi", n.scheme, n.host, n.port)];
-    if let Some(hl) = &n.host_local {
-        v.push(format!("{}://{}:{}/webapi", n.scheme, hl, n.port));
+    let nas = cfg.nas.as_ref().ok_or("no nas config")?;
+    let mut urls = vec![format!("{}://{}:{}/webapi", nas.scheme, nas.host, nas.port)];
+    if let Some(local_host) = &nas.host_local {
+        urls.push(format!("{}://{}:{}/webapi", nas.scheme, local_host, nas.port));
     }
-    Ok(v)
+    Ok(urls)
 }
 
 fn coerce_i64(v: &serde_json::Value) -> i64 {
@@ -73,19 +73,26 @@ async fn login() -> Result<(String, String), String> {
     Err(last)
 }
 
+/// The active (base url, sid), reusing the cached session or logging in if there is none.
+/// Cloning out of the lock in its own statement drops the std Mutex guard before any
+/// .await, keeping callers' futures Send (see api_call's comment).
+async fn current_session() -> Result<(String, String), String> {
+    let cached = SESSION.lock().unwrap().clone();
+    match cached {
+        Some(s) => Ok(s),
+        None => login().await,
+    }
+}
+
 async fn api_call(
     api: &str,
     method: &str,
     version: &str,
     extra: &[(&str, &str)],
 ) -> Result<serde_json::Value, String> {
-    // Clone the cached session and drop the guard BEFORE any .await (a std Mutex guard
-    // held across await makes the future !Send, which axum handlers reject).
-    let cached = SESSION.lock().unwrap().clone();
-    let (mut base, mut sid) = match cached {
-        Some(s) => s,
-        None => login().await?,
-    };
+    // current_session() drops the std Mutex guard before any .await (a guard held across
+    // await makes the future !Send, which axum handlers reject).
+    let (mut base, mut sid) = current_session().await?;
     for attempt in 0..2 {
         let mut q: Vec<(&str, &str)> = vec![
             ("api", api),
@@ -124,11 +131,7 @@ async fn api_call(
 
 /// Stream a file off the NAS (DSM FileStation Download). Returns the raw HTTP response.
 pub async fn download(path: &str) -> Result<reqwest::Response, String> {
-    let cached = SESSION.lock().unwrap().clone();
-    let (base, sid) = match cached {
-        Some(s) => s,
-        None => login().await?,
-    };
+    let (base, sid) = current_session().await?;
     for attempt in 0..2 {
         let r = http()
             .get(format!("{base}/entry.cgi"))
@@ -165,11 +168,7 @@ pub async fn upload(
     len: u64,
     overwrite: bool,
 ) -> Result<(), String> {
-    let cached = SESSION.lock().unwrap().clone();
-    let (base, sid) = match cached {
-        Some(s) => s,
-        None => login().await?,
-    };
+    let (base, sid) = current_session().await?;
     let part =
         reqwest::multipart::Part::stream_with_length(body, len).file_name(name.to_string());
     let form = reqwest::multipart::Form::new()
@@ -273,17 +272,16 @@ pub async fn fs_op(_s: &Server, op: &str, path: &str, to: Option<&str>) -> Resul
         "touch" => {
             let (parent, name) = split_parent(path)?;
             // DSM's overwrite=false means SKIP (success), so check existence ourselves
-            if let Ok(d) = api_call(
+            let exists = api_call(
                 "SYNO.FileStation.List",
                 "getinfo",
                 "2",
                 &[("path", nas_arg(path).as_str())],
             )
             .await
-            {
-                if d["files"][0]["isdir"].is_boolean() {
-                    return Err("already exists".into());
-                }
+            .is_ok_and(|d| d["files"][0]["isdir"].is_boolean());
+            if exists {
+                return Err("already exists".into());
             }
             upload(parent, name, reqwest::Body::from(Vec::new()), 0, false).await
         }

@@ -106,11 +106,11 @@ static MUT_LOCK: Mutex<()> = Mutex::new(());
 fn dev_path() -> Option<PathBuf> {
     let mut cands: Vec<PathBuf> = vec!["config.local.json".into(), "../config.local.json".into()];
     if let Ok(exe) = std::env::current_exe() {
-        let mut d = exe.parent().map(|p| p.to_path_buf());
+        let mut dir_cursor = exe.parent().map(|p| p.to_path_buf());
         for _ in 0..6 {
-            if let Some(dir) = &d {
+            if let Some(dir) = &dir_cursor {
                 cands.push(dir.join("config.local.json"));
-                d = dir.parent().map(|p| p.to_path_buf());
+                dir_cursor = dir.parent().map(|p| p.to_path_buf());
             }
         }
     }
@@ -237,6 +237,11 @@ pub fn get() -> Arc<Config> {
     state().read().unwrap().clone()
 }
 
+/// Look up a server by id in the current registry snapshot.
+pub(crate) fn find(id: &str) -> Option<Server> {
+    get().servers.iter().find(|s| s.id == id).cloned()
+}
+
 /// Config revision — bumped on every reload or mutation; exposed via /api/fleet.
 pub fn rev() -> u64 {
     REV.load(Ordering::Relaxed)
@@ -293,17 +298,22 @@ pub fn start_watcher() {
 
 // ---------------------------------------------------------------- registry mutations (ported from the prototype)
 fn slug(name: &str) -> String {
-    let s: String = name
+    let replaced: String = name
         .to_lowercase()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    let s = s.trim_matches('-').to_string();
-    let s = s.split('-').filter(|x| !x.is_empty()).collect::<Vec<_>>().join("-");
-    if s.is_empty() {
+    let trimmed = replaced.trim_matches('-');
+    // Collapse runs of '-' (left by adjacent non-alphanumeric chars) into a single separator.
+    let collapsed = trimmed
+        .split('-')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if collapsed.is_empty() {
         "item".into()
     } else {
-        s
+        collapsed
     }
 }
 

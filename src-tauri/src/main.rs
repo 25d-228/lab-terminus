@@ -68,23 +68,24 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Extract the file's basename from a /api/{id}/download link's `path=` query,
+/// falling back to "download" when the query is missing or yields an empty name.
+fn download_file_name(url: &str) -> String {
+    let Some(query) = url.split("path=").nth(1) else {
+        return "download".into();
+    };
+    let path = percent_decode(query.split('&').next().unwrap_or(query));
+    let name = path.trim_end_matches('/').rsplit('/').next().unwrap_or("download");
+    if name.is_empty() {
+        return "download".into();
+    }
+    name.to_string()
+}
+
 /// Pick a save path in Downloads for /api/{id}/download links: the remote file's
 /// name, deduplicated with " (n)" if it already exists.
 fn download_destination(app: &tauri::AppHandle, url: &str) -> std::path::PathBuf {
-    let name = url
-        .split("path=")
-        .nth(1)
-        .map(|q| q.split('&').next().unwrap_or(q))
-        .map(percent_decode)
-        .map(|p| {
-            p.trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or("download")
-                .to_string()
-        })
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "download".into());
+    let name = download_file_name(url);
     let dir = app
         .path()
         .download_dir()
@@ -101,6 +102,46 @@ fn download_destination(app: &tauri::AppHandle, url: &str) -> std::path::PathBuf
         i += 1;
     }
     dest
+}
+
+/// Build the system tray (close-to-tray lives here): menu + icon + event handlers.
+fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let show = MenuItem::with_id(app, "show", "Show Lab Terminus", true, None::<&str>)?;
+    let opencfg =
+        MenuItem::with_id(app, "opencfg", "Open config file location", true, None::<&str>)?;
+    let reload = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Lab Terminus", true, None::<&str>)?;
+    let sep = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&show, &sep, &opencfg, &reload, &sep, &quit])?;
+
+    TrayIconBuilder::with_id("lt-tray")
+        .icon(app.default_window_icon().expect("icon").clone())
+        .tooltip("Lab Terminus")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main(app),
+            "opencfg" => reveal_config(),
+            "reload" => {
+                config::force_reload();
+                eprintln!("[config] reloaded from tray");
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    Ok(())
 }
 
 fn main() {
@@ -177,40 +218,7 @@ fn main() {
             wb.build()?;
 
             // system tray: close-to-tray lives here
-            let show = MenuItem::with_id(app, "show", "Show Lab Terminus", true, None::<&str>)?;
-            let opencfg =
-                MenuItem::with_id(app, "opencfg", "Open config file location", true, None::<&str>)?;
-            let reload = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Lab Terminus", true, None::<&str>)?;
-            let sep = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&show, &sep, &opencfg, &reload, &sep, &quit])?;
-
-            TrayIconBuilder::with_id("lt-tray")
-                .icon(app.default_window_icon().expect("icon").clone())
-                .tooltip("Lab Terminus")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => show_main(app),
-                    "opencfg" => reveal_config(),
-                    "reload" => {
-                        config::force_reload();
-                        eprintln!("[config] reloaded from tray");
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_main(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+            build_tray(app.handle())?;
 
             Ok(())
         })

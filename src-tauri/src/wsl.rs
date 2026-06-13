@@ -48,29 +48,25 @@ async fn run_status(cmd: &str) -> Result<(i32, String, String), String> {
 
 pub async fn status(s: &Server) -> serde_json::Value {
     match run(ssh::GATHER).await {
-        Ok(out) => {
-            let mut g = ssh::parse_gather(&out);
-            g["id"] = s.id.clone().into();
-            g["online"] = true.into();
-            g["error"] = serde_json::Value::Null;
-            g
-        }
+        Ok(out) => ssh::online(s, &out),
         Err(e) => ssh::offline(s, &e),
     }
+}
+
+// Resolve the WSL user's $HOME, falling back to "/" when it is unset or empty.
+async fn home_dir() -> String {
+    let home = run("printf %s \"$HOME\"").await.unwrap_or_default();
+    let home = home.trim();
+    if home.is_empty() {
+        return "/".into();
+    }
+    home.to_string()
 }
 
 pub async fn ls_dir(_s: &Server, path: Option<&str>) -> serde_json::Value {
     let p = match path {
         Some(p) if !p.is_empty() => p.to_string(),
-        _ => {
-            let h = run("printf %s \"$HOME\"").await.unwrap_or_default();
-            let h = h.trim().to_string();
-            if h.is_empty() {
-                "/".into()
-            } else {
-                h
-            }
-        }
+        _ => home_dir().await,
     };
     // NUL-terminated records + at-most-4-way split: filenames containing tabs or
     // newlines stay intact (the name is the final field, so embedded tabs survive).

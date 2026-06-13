@@ -104,6 +104,17 @@ fn add_progress(id: &str, n: u64) {
     });
 }
 
+/// Mark a job finished. `total` started as an estimate (or 0 when unknown), so
+/// snap it up to the bytes actually moved if progress overshot it.
+fn mark_done(id: &str) {
+    update(id, |j| {
+        j.state = "done";
+        if j.total < j.done {
+            j.total = j.done;
+        }
+    });
+}
+
 // ---------------------------------------------------------------- io endpoints per kind
 async fn sftp_for(s: &config::Server) -> Result<russh_sftp::client::SftpSession, String> {
     let handle = ssh::connect(s).await?;
@@ -171,6 +182,87 @@ fn basename(p: &str) -> String {
         .to_string()
 }
 
+/// Copy `reader` (whose length is known up front) to the NAS.
+///
+/// DSM rejects chunked uploads, so the multipart needs a declared length. We
+/// pump the reader through a bounded channel and hand the receiving end to the
+/// uploader as a streamed body of exactly `total` bytes.
+async fn copy_to_nas_streamed(
+    id: &str,
+    cancel: Arc<AtomicBool>,
+    mut reader: Reader,
+    dst_dir: &str,
+    name: &str,
+    total: u64,
+) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(4);
+    let cid = id.to_string();
+    let pump = tokio::spawn(async move {
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = tx.send(Err(std::io::Error::other("canceled"))).await;
+                return Err("__canceled".to_string());
+            }
+            match reader.read_chunk(&mut buf).await {
+                Ok(0) => return Ok(()),
+                Ok(n) => {
+                    add_progress(&cid, n as u64);
+                    if tx.send(Ok(buf[..n].to_vec())).await.is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::other(e.clone()))).await;
+                    return Err(e);
+                }
+            }
+        }
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    nas::upload(
+        dst_dir,
+        name,
+        reqwest::Body::wrap_stream(stream),
+        total,
+        true,
+    )
+    .await?;
+    match pump.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Stream `reader` to a freshly created file under `dst_dir` on the SSH host.
+async fn write_ssh_streamed(
+    id: &str,
+    cancel: &Arc<AtomicBool>,
+    mut reader: Reader,
+    dst: &config::Server,
+    dst_dir: &str,
+    name: &str,
+) -> Result<(), String> {
+    let sftp = sftp_for(dst).await?;
+    let dst_path = format!("{}/{}", dst_dir.trim_end_matches('/'), name);
+    let mut out = sftp.create(&dst_path).await.map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("__canceled".into());
+        }
+        let n = reader.read_chunk(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
+        add_progress(id, n as u64);
+    }
+    out.shutdown().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 async fn copy_worker(
     id: String,
     cancel: Arc<AtomicBool>,
@@ -196,70 +288,12 @@ async fn copy_worker(
             update(&id, |j| j.total = total);
         }
         match dst.kind.as_str() {
-            "ssh" => {
-                let sftp = sftp_for(&dst).await?;
-                let dst_path = format!("{}/{}", dst_dir.trim_end_matches('/'), name);
-                let mut out = sftp.create(&dst_path).await.map_err(|e| e.to_string())?;
-                let mut buf = vec![0u8; CHUNK];
-                loop {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err("__canceled".into());
-                    }
-                    let n = reader.read_chunk(&mut buf).await?;
-                    if n == 0 {
-                        break;
-                    }
-                    out.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
-                    add_progress(&id, n as u64);
-                }
-                out.shutdown().await.map_err(|e| e.to_string())?;
-                Ok(())
-            }
+            "ssh" => write_ssh_streamed(&id, &cancel, reader, &dst, &dst_dir, &name).await,
             "nas" => {
                 // DSM rejects chunked uploads, so the multipart needs a known length.
                 if total > 0 {
-                    // stream the reader through a channel, declaring the length up front
-                    let (tx, rx) =
-                        tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(4);
-                    let cid = id.clone();
-                    let cancel2 = cancel.clone();
-                    let pump = tokio::spawn(async move {
-                        let mut buf = vec![0u8; CHUNK];
-                        loop {
-                            if cancel2.load(Ordering::Relaxed) {
-                                let _ = tx.send(Err(std::io::Error::other("canceled"))).await;
-                                return Err("__canceled".to_string());
-                            }
-                            match reader.read_chunk(&mut buf).await {
-                                Ok(0) => return Ok(()),
-                                Ok(n) => {
-                                    add_progress(&cid, n as u64);
-                                    if tx.send(Ok(buf[..n].to_vec())).await.is_err() {
-                                        return Ok(());
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ =
-                                        tx.send(Err(std::io::Error::other(e.clone()))).await;
-                                    return Err(e);
-                                }
-                            }
-                        }
-                    });
-                    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                    nas::upload(
-                        &dst_dir,
-                        &name,
-                        reqwest::Body::wrap_stream(stream),
-                        total,
-                        true,
-                    )
-                    .await?;
-                    match pump.await {
-                        Ok(Ok(())) => Ok(()),
-                        Ok(Err(e)) => Err(e),
-                        Err(e) => Err(e.to_string()),
-                    }
+                    copy_to_nas_streamed(&id, cancel.clone(), reader, &dst_dir, &name, total)
+                        .await
                 } else {
                     // size unknown — buffer (rare: only NAS→NAS of unknown length)
                     let mut data = Vec::new();
@@ -284,12 +318,7 @@ async fn copy_worker(
     }
     .await;
     match result {
-        Ok(()) => update(&id, |j| {
-            j.state = "done";
-            if j.total < j.done {
-                j.total = j.done;
-            }
-        }),
+        Ok(()) => mark_done(&id),
         Err(e) if e == "__canceled" => update(&id, |j| j.state = "canceled"),
         Err(e) => update(&id, |j| {
             j.state = "error";
@@ -299,10 +328,6 @@ async fn copy_worker(
 }
 
 // ---------------------------------------------------------------- axum handlers
-fn find(id: &str) -> Option<config::Server> {
-    config::get().servers.iter().find(|s| s.id == id).cloned()
-}
-
 pub async fn list() -> impl IntoResponse {
     let mut v: Vec<Job> = jobs().lock().unwrap().values().cloned().collect();
     v.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal));
@@ -346,7 +371,7 @@ pub struct CopyEnd {
 }
 
 pub async fn copy(Json(b): Json<CopyBody>) -> Response {
-    let (Some(src), Some(dst)) = (find(&b.src.sid), find(&b.dst.sid)) else {
+    let (Some(src), Some(dst)) = (config::find(&b.src.sid), config::find(&b.dst.sid)) else {
         return (StatusCode::BAD_REQUEST, "bad src/dst").into_response();
     };
     if b.src.path.is_empty() || b.dst.path.is_empty() {
@@ -371,7 +396,7 @@ pub struct DlQuery {
 }
 
 pub async fn download(Path(id): Path<String>, Query(q): Query<DlQuery>) -> Response {
-    let Some(s) = find(&id) else {
+    let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     let (reader, total) = match open_reader(&s, &q.path).await {
@@ -426,7 +451,7 @@ pub struct UpQuery {
 }
 
 pub async fn upload(Path(id): Path<String>, Query(q): Query<UpQuery>, req: Request) -> Response {
-    let Some(s) = find(&id) else {
+    let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     if s.kind != "ssh" {
@@ -459,12 +484,7 @@ pub async fn upload(Path(id): Path<String>, Query(q): Query<UpQuery>, req: Reque
     .await;
     match result {
         Ok(()) => {
-            update(&id_job, |j| {
-                j.state = "done";
-                if j.total < j.done {
-                    j.total = j.done;
-                }
-            });
+            mark_done(&id_job);
             let j = jobs().lock().unwrap().get(&id_job).map(|j| j.public());
             Json(serde_json::json!({"ok": true, "job": j})).into_response()
         }

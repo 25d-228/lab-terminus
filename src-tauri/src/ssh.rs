@@ -175,6 +175,70 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
     }
 }
 
+fn numf(s: &str) -> f64 {
+    s.parse::<f64>().unwrap_or(0.0)
+}
+
+fn parse_disks(lines: &[String]) -> Vec<serde_json::Value> {
+    let mut disks = Vec::new();
+    for ln in lines {
+        let p: Vec<&str> = ln.split_whitespace().collect();
+        if p.len() < 3 {
+            continue;
+        }
+        if let (Ok(sz), Ok(us)) = (p[1].parse::<i64>(), p[2].parse::<i64>()) {
+            disks.push(serde_json::json!({"m": p[0], "size": sz, "used": us}));
+        }
+    }
+    disks
+}
+
+fn parse_gpus(lines: &[String]) -> (Vec<serde_json::Value>, HashMap<String, i64>) {
+    let mut gpus = Vec::new();
+    let mut uuidmap: HashMap<String, i64> = HashMap::new();
+    for ln in lines {
+        let c: Vec<String> = ln.split(',').map(|x| x.trim().to_string()).collect();
+        if c.len() < 9 {
+            continue;
+        }
+        if let Ok(idx) = c[0].parse::<i64>() {
+            uuidmap.insert(c[1].clone(), idx);
+            gpus.push(serde_json::json!({
+                "index": idx, "name": c[2],
+                "mu": numf(&c[3]) as i64, "mt": numf(&c[4]) as i64,
+                "util": numf(&c[5]) as i64, "temp": numf(&c[6]) as i64,
+                "pow": numf(&c[7]), "plim": numf(&c[8]) as i64
+            }));
+        }
+    }
+    (gpus, uuidmap)
+}
+
+fn parse_ps_map(lines: &[String]) -> HashMap<i64, (String, String, String)> {
+    let mut psmap: HashMap<i64, (String, String, String)> = HashMap::new();
+    for ln in lines {
+        // Skip any PS line we can't fully tokenize/parse.
+        let Some((pid_s, r)) = next_token(ln) else {
+            continue;
+        };
+        let Some((user, r)) = next_token(r) else {
+            continue;
+        };
+        let Some((etime, r)) = next_token(r) else {
+            continue;
+        };
+        let Ok(pid) = pid_s.parse::<i64>() else {
+            continue;
+        };
+        let etime = etime
+            .parse::<i64>()
+            .map(fmt_dur)
+            .unwrap_or_else(|_| etime.to_string());
+        psmap.insert(pid, (user.to_string(), etime, r.trim_start().to_string()));
+    }
+    psmap
+}
+
 pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
     let mut sec: HashMap<String, Vec<String>> = HashMap::new();
     let mut cur: Option<String> = None;
@@ -220,57 +284,19 @@ pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
             serde_json::json!({"total": 0, "used": 0})
         }
     };
-    let mut disks = Vec::new();
-    for ln in get("DF") {
-        let p: Vec<&str> = ln.split_whitespace().collect();
-        if p.len() >= 3 {
-            if let (Ok(sz), Ok(us)) = (p[1].parse::<i64>(), p[2].parse::<i64>()) {
-                disks.push(serde_json::json!({"m": p[0], "size": sz, "used": us}));
-            }
-        }
-    }
-    let numf = |s: &str| s.parse::<f64>().unwrap_or(0.0);
-    let mut gpus = Vec::new();
-    let mut uuidmap: HashMap<String, i64> = HashMap::new();
-    for ln in get("GPU") {
-        let c: Vec<String> = ln.split(',').map(|x| x.trim().to_string()).collect();
-        if c.len() >= 9 {
-            if let Ok(idx) = c[0].parse::<i64>() {
-                uuidmap.insert(c[1].clone(), idx);
-                gpus.push(serde_json::json!({
-                    "index": idx, "name": c[2],
-                    "mu": numf(&c[3]) as i64, "mt": numf(&c[4]) as i64,
-                    "util": numf(&c[5]) as i64, "temp": numf(&c[6]) as i64,
-                    "pow": numf(&c[7]), "plim": numf(&c[8]) as i64
-                }));
-            }
-        }
-    }
+    let disks = parse_disks(&get("DF"));
+    let (gpus, uuidmap) = parse_gpus(&get("GPU"));
     let mut apps: Vec<(i64, String, i64)> = Vec::new();
     for ln in get("APPS") {
         let c: Vec<String> = ln.split(',').map(|x| x.trim().to_string()).collect();
-        if c.len() >= 3 {
-            if let Ok(pid) = c[0].parse::<i64>() {
-                apps.push((pid, c[1].clone(), numf(&c[2]) as i64));
-            }
+        if c.len() < 3 {
+            continue;
+        }
+        if let Ok(pid) = c[0].parse::<i64>() {
+            apps.push((pid, c[1].clone(), numf(&c[2]) as i64));
         }
     }
-    let mut psmap: HashMap<i64, (String, String, String)> = HashMap::new();
-    for ln in get("PS") {
-        if let Some((pid_s, r)) = next_token(&ln) {
-            if let Some((user, r)) = next_token(r) {
-                if let Some((etime, r)) = next_token(r) {
-                    if let Ok(pid) = pid_s.parse::<i64>() {
-                        let etime = etime
-                            .parse::<i64>()
-                            .map(fmt_dur)
-                            .unwrap_or_else(|_| etime.to_string());
-                        psmap.insert(pid, (user.to_string(), etime, r.trim_start().to_string()));
-                    }
-                }
-            }
-        }
-    }
+    let psmap = parse_ps_map(&get("PS"));
     let procs: Vec<serde_json::Value> = apps
         .iter()
         .map(|(pid, uuid, mem)| {
@@ -299,6 +325,14 @@ pub(crate) fn offline(s: &Server, err: &str) -> serde_json::Value {
     })
 }
 
+pub(crate) fn online(s: &Server, out: &str) -> serde_json::Value {
+    let mut g = parse_gather(out);
+    g["id"] = s.id.clone().into();
+    g["online"] = true.into();
+    g["error"] = serde_json::Value::Null;
+    g
+}
+
 // ---------------------------------------------------------------- status / fleet
 pub async fn status_for(s: Server) -> serde_json::Value {
     match s.kind.as_str() {
@@ -313,13 +347,7 @@ pub async fn status_for(s: Server) -> serde_json::Value {
     }
     .await
     {
-        Ok(out) => {
-            let mut g = parse_gather(&out);
-            g["id"] = s.id.clone().into();
-            g["online"] = true.into();
-            g["error"] = serde_json::Value::Null;
-            g
-        }
+        Ok(out) => online(&s, &out),
         Err(e) => offline(&s, &e),
     }
 }
@@ -514,7 +542,12 @@ pub(crate) fn split_cwd(out: &str, cwd: &str) -> (String, String) {
     if let Some(i) = out.rfind("@@CWD@@") {
         let text = out[..i].trim_end_matches('\n').to_string();
         let newcwd = out[i + 7..].trim().to_string();
-        (text, if newcwd.is_empty() { cwd.to_string() } else { newcwd })
+        let resolved_cwd = if newcwd.is_empty() {
+            cwd.to_string()
+        } else {
+            newcwd
+        };
+        (text, resolved_cwd)
     } else {
         (out.to_string(), cwd.to_string())
     }

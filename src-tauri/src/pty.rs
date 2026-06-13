@@ -26,7 +26,7 @@ pub async fn pty_handler(
 ) -> Response {
     let cols = q.cols.unwrap_or(80);
     let rows = q.rows.unwrap_or(24);
-    let Some(s) = config::get().servers.iter().find(|s| s.id == id).cloned() else {
+    let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     if s.kind == "nas" {
@@ -102,24 +102,20 @@ async fn wsl_pty(socket: WebSocket, cols: u16, rows: u16) {
         .and_then(|w| w.distro.clone())
         .unwrap_or_else(|| "Ubuntu".into());
     let sys = native_pty_system();
-    let pair = match sys.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
-        Ok(p) => p,
-        Err(_) => return,
+    let Ok(pair) = sys.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) else {
+        return;
     };
     let mut cmd = CommandBuilder::new("wsl.exe");
     cmd.args(["-d", distro.as_str()]);
-    let _child = match pair.slave.spawn_command(cmd) {
-        Ok(c) => c,
-        Err(_) => return,
+    let Ok(_child) = pair.slave.spawn_command(cmd) else {
+        return;
     };
     drop(pair.slave);
-    let mut reader = match pair.master.try_clone_reader() {
-        Ok(r) => r,
-        Err(_) => return,
+    let Ok(mut reader) = pair.master.try_clone_reader() else {
+        return;
     };
-    let mut pwriter = match pair.master.take_writer() {
-        Ok(w) => w,
-        Err(_) => return,
+    let Ok(mut pwriter) = pair.master.take_writer() else {
+        return;
     };
     let master = pair.master;
 
@@ -157,16 +153,14 @@ async fn wsl_pty(socket: WebSocket, cols: u16, rows: u16) {
             m = stream.next() => match m {
                 Some(Ok(Message::Binary(b))) => { if in_tx.send(b.to_vec()).is_err() { break; } }
                 Some(Ok(Message::Text(t))) => {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
-                        if v["t"].as_str() == Some("r") {
-                            let _ = master.resize(PtySize {
-                                rows: v["r"].as_u64().unwrap_or(24) as u16,
-                                cols: v["c"].as_u64().unwrap_or(80) as u16,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            });
-                        }
-                    }
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) else { continue; };
+                    if v["t"].as_str() != Some("r") { continue; }
+                    let _ = master.resize(PtySize {
+                        rows: v["r"].as_u64().unwrap_or(24) as u16,
+                        cols: v["c"].as_u64().unwrap_or(80) as u16,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}

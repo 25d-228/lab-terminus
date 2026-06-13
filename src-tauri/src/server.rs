@@ -39,10 +39,6 @@ pub fn router() -> Router {
         .fallback(static_handler)
 }
 
-fn find(id: &str) -> Option<config::Server> {
-    config::get().servers.iter().find(|s| s.id == id).cloned()
-}
-
 fn err400(e: String) -> Response {
     (StatusCode::BAD_REQUEST, e).into_response()
 }
@@ -112,7 +108,7 @@ async fn fleet() -> impl IntoResponse {
 }
 
 async fn host_status(Path(id): Path<String>) -> Response {
-    match find(&id) {
+    match config::find(&id) {
         Some(s) => Json(ssh::status_for(s).await).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown server").into_response(),
     }
@@ -124,7 +120,7 @@ struct LsQuery {
 }
 
 async fn ls(Path(id): Path<String>, Query(q): Query<LsQuery>) -> Response {
-    let Some(s) = find(&id) else {
+    let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     let v = match s.kind.as_str() {
@@ -150,7 +146,7 @@ fn unsafe_path(p: &str) -> bool {
 }
 
 async fn fs_op(Path(id): Path<String>, Json(b): Json<FsBody>) -> Response {
-    let Some(s) = find(&id) else {
+    let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     if unsafe_path(&b.path) || b.to.as_deref().is_some_and(unsafe_path) {
@@ -174,7 +170,7 @@ struct ExecBody {
 }
 
 async fn exec_cmd(Path(id): Path<String>, Json(b): Json<ExecBody>) -> Response {
-    let Some(s) = find(&id) else {
+    let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     let cwd = b
