@@ -13,7 +13,7 @@ async function api(p,opts){const r=await fetch(p,opts);if(!r.ok){let t='';try{t=
 
 let SERVERS=[], byId={}, FOLDERS=[], SIDX={}, _modal={mode:'server',folder:null}, _sendto=null;
 const FLEET={};
-const ST={view:'fleet',active:null,tab:'explorer',cwd:{},sel:null,hidden:false,sort:{key:'name',asc:true},filter:'',ovq:'',ovmode:'grid',termTabs:{},termActive:{},broadcast:false,sessSeq:0,listing:null,loadSeq:0,alert:false,collapsed:{},hist:{},procOpen:{},chart:null,monTimer:null};
+const ST={view:'fleet',active:null,tab:'explorer',cwd:{},sel:null,hidden:false,sort:{key:'name',asc:true},filter:'',ovq:'',ovmode:'grid',termTabs:{},termActive:{},broadcast:false,sessSeq:0,listing:null,loadSeq:0,alert:false,collapsed:{},hist:{},procOpen:{},chart:null,monTimer:null,vimNav:false,zoom:1,focus:'main',sideCur:null,_exItems:[],_lastG:0};
 
 let toastT;function toast(m){const t=$('lt-toast');t.textContent=m;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2600);}
 
@@ -43,12 +43,14 @@ function renderSide(){
   if(!list.length){h+=`<div class="lt-sv-empty">empty · <b data-add="server" data-folder="${esc(f.key)}">add server</b></div>`;return;}
   list.forEach(s=>{const d=FLEET[s.id],g=gpuSummary(d),dk=diskPrimary(d);
    let rt='';if(g&&g.idle===g.total)rt='<span class="lt-sv-free">FREE</span>';else if(g)rt=`<span class="lt-sv-pct" style="color:${utilColor(g.avg)}">${g.avg}%</span>`;else if(dk&&s.kind==='nas')rt=`<span class="lt-sv-pct">${pct(dk.used,dk.size)}%</span>`;
-   h+=`<div class="lt-sv${(ST.view==='server'&&s.id===ST.active)?' on':''}" data-sv="${s.id}"><span class="lt-svi" style="${svTile(s.id)}">${esc(svCode(s))}<span class="lt-st ${statusDot(d)}"></span></span><span class="lt-svt"><span class="lt-sv-name">${esc(s.name)}</span><span class="lt-sv-sub">${esc(svSub(s))}</span></span>${rt}</div>`;});
+   const curc=(ST.vimNav&&ST.focus==='side'&&s.id===ST.sideCur)?' cur':'';
+   h+=`<div class="lt-sv${(ST.view==='server'&&s.id===ST.active)?' on':''}${curc}" data-sv="${s.id}"><span class="lt-svi" style="${svTile(s.id)}">${esc(svCode(s))}<span class="lt-st ${statusDot(d)}"></span></span><span class="lt-svt"><span class="lt-sv-name">${esc(s.name)}</span><span class="lt-sv-sub">${esc(svSub(s))}</span></span>${rt}</div>`;});
  });
  $('lt-side').innerHTML=h;
 }
 async function refreshRegistry(){try{const[sv,fo]=await Promise.all([api('/api/servers'),api('/api/folders')]);SERVERS=sv;FOLDERS=fo;byId=Object.fromEntries(SERVERS.map(s=>[s.id,s]));SIDX=Object.fromEntries(SERVERS.map((s,i)=>[s.id,i]));
  if(ST.active&&!byId[ST.active]){ST.view='fleet';ST.active=SERVERS[0]&&SERVERS[0].id;ST.sel=null;ST.listing=null;renderAll();}  // the open server was removed (e.g. config hand-edit)
+ if(ST.sideCur&&!byId[ST.sideCur])ST.sideCur=ST.active||(SERVERS[0]&&SERVERS[0].id);  // vim cursor's server vanished
  renderSide();}catch(e){}}
 /* add server / folder modal */
 function openAddModal(mode,folder){_modal={mode:mode||'server',folder:folder||(FOLDERS[0]&&FOLDERS[0].key)||'lab'};let el=$('lt-modal');if(!el){el=document.createElement('div');el.id='lt-modal';el.className='lt-modal';(document.querySelector('.lt-window')||document.body).appendChild(el);}renderModal();}
@@ -62,7 +64,11 @@ function closeCtx(){const m=$('lt-ctx');if(m)m.remove();}
 function showCtx(x,y,items){closeCtx();const m=document.createElement('div');m.id='lt-ctx';m.className='lt-ctx';
  m.innerHTML=items.map((it,i)=>`<div class="lt-ctx-i${it.danger?' danger':''}" data-ci="${i}">${esc(it.label)}</div>`).join('');
  (document.querySelector('.lt-window')||document.body).appendChild(m);
- m.style.left=Math.min(x,window.innerWidth-198)+'px';m.style.top=Math.min(y,window.innerHeight-14-items.length*34)+'px';
+ // .lt-ctx is position:fixed inside the zoomed .lt-window, so map the real viewport
+ // coords (x,y) into the element's zoomed local space by dividing by the zoom factor.
+ const _z=ST.zoom||1;
+ m.style.left=Math.max(0,Math.min(x,window.innerWidth-198)/_z)+'px';
+ m.style.top=Math.max(0,Math.min(y,window.innerHeight-14-items.length*34)/_z)+'px';
  m.addEventListener('click',ev=>{const t=ev.target.closest('[data-ci]');if(!t)return;const it=items[+t.getAttribute('data-ci')];closeCtx();off();if(it&&it.fn)it.fn();});
  const off=()=>{document.removeEventListener('mousedown',close,true);document.removeEventListener('keydown',esckey,true);};
  const close=ev=>{if(!ev.target.closest('#lt-ctx')){closeCtx();off();}};
@@ -213,6 +219,7 @@ function renderExplorer(){
   if(!ST.hidden)items=items.filter(r=>!r.name.startsWith('.')&&r.name!=='#recycle');
   if(ST.filter)items=items.filter(r=>r.name.toLowerCase().includes(ST.filter.toLowerCase()));
   const k=ST.sort.key,asc=ST.sort.asc?1:-1;items.sort((a,b)=>{if(a.isdir!==b.isdir)return a.isdir?-1:1;let x,y;if(k==='name'){x=a.name.toLowerCase();y=b.name.toLowerCase();}else if(k==='size'){x=a.isdir?-1:a.size;y=b.isdir?-1:b.size;}else{x=a.mtime;y=b.mtime;}return x<y?-asc:x>y?asc:0;});
+  ST._exItems=items;  // ordered visible rows — drives j/k cursor movement (vim nav)
   if(!items.length)table+=`<div class="lt-empty">Empty folder${ST.filter?' (filter active)':''}.</div>`;
   items.forEach(r=>{const isHid=r.name.startsWith('.');const seld=ST.sel&&ST.sel.name===r.name?' sel':'';
    table+=`<div class="lt-fr${seld}${isHid?' hid':''}" data-name="${esc(r.name)}" data-dir="${r.isdir?1:0}"><span class="nm">${fileIcon(r.name,r.isdir,r.islink)}<span class="nmtx">${esc(r.name)}</span></span><span class="sz">${r.isdir?'—':bytes(r.size)}</span><span class="dt">${r.mtime?ago(r.mtime):''}</span></div>`;});
@@ -410,13 +417,16 @@ document.addEventListener('mousemove',e=>{
  const ser=data.series,n=Math.max(1,...ser.map(s=>s.pts.length)),idx=Math.min(n-1,Math.max(0,Math.round(Math.min(1,Math.max(0,fx))*(n-1))));
  const px=r.left+L+(n<2?w:idx/(n-1)*w);
  const {t,g}=ensureChartTip();
- g.style.display='block';g.style.left=px+'px';g.style.top=r.top+'px';g.style.height=r.height+'px';
+ // tip/guide live inside the zoomed .lt-window; getBoundingClientRect/clientX are visual
+ // (zoomed) coords, so divide by zoom to map them into the element's local space.
+ const _z=ST.zoom||1;
+ g.style.display='block';g.style.left=(px/_z)+'px';g.style.top=(r.top/_z)+'px';g.style.height=(r.height/_z)+'px';
  const ago=(n-1-idx)*data.sec;
  t.innerHTML=`<div class="tt">${ago<=0?'now':'~'+ago+'s ago'}</div>`+ser.map(s=>{const v=s.pts[Math.min(idx,s.pts.length-1)]||0;return `<div><span style="color:${s.color}">●</span> ${esc(s.label)} <b>${Math.round(v)}%</b></div>`;}).join('');
- t.style.display='block';const tw=t.offsetWidth;let tx=px+12;if(tx+tw>window.innerWidth-8)tx=px-tw-12;t.style.left=tx+'px';t.style.top=(r.top+6)+'px';
+ t.style.display='block';const tw=t.offsetWidth*_z;let tx=px+12;if(tx+tw>window.innerWidth-8)tx=px-tw-12;t.style.left=(tx/_z)+'px';t.style.top=((r.top+6)/_z)+'px';
 });
 function renderAll(){renderSide();renderHeadTabs();renderView();}
-function openServer(id,tab){ST.view='server';ST.active=id;if(tab)ST.tab=tab;ST.sel=null;ST.filter='';ST.listing=null;const s=byId[id];if(s&&s.group){ST.collapsed[s.group]=false;}renderAll();}
+function openServer(id,tab){ST.view='server';ST.active=id;ST.focus='main';ST.sideCur=id;if(tab)ST.tab=tab;ST.sel=null;ST.filter='';ST.listing=null;const s=byId[id];if(s&&s.group){ST.collapsed[s.group]=false;}renderAll();}
 
 /* ---------------- events ---------------- */
 document.addEventListener('click',e=>{
@@ -426,6 +436,10 @@ document.addEventListener('click',e=>{
  if(e.target.id==='lt-sendto'){closeSendTo();return;}
  if(e.target.closest('[data-sclose]')){closeSendTo();return;}
  if(e.target.closest('[data-ssubmit]')){submitSendTo();return;}
+ if(e.target.closest('[data-settings]')){openSettings();return;}
+ if(e.target.id==='lt-settings'||e.target.closest('[data-setclose]')){closeSettings();return;}
+ {const z=e.target.closest('[data-zoom]');if(z){zoomStep(z.getAttribute('data-zoom')==='1'?0.1:-0.1);return;}}
+ if(e.target.closest('[data-vimtoggle]')){setVim(!ST.vimNav);const lg=document.querySelector('#lt-settings .lt-set-legend');if(lg)lg.classList.toggle('dim',!ST.vimNav);return;}
  if(e.target.closest('#lt-xfer-btn')){toggleDrawer();return;}
  if(e.target.closest('[data-xclose]')){toggleDrawer(false);return;}
  {const xc=e.target.closest('[data-xcancel]');if(xc){api('/api/transfers/'+xc.getAttribute('data-xcancel')+'/cancel',{method:'POST'}).then(xferTick);return;}}
@@ -435,7 +449,7 @@ document.addEventListener('click',e=>{
  const mmode=e.target.closest('[data-mode]');if(mmode){_modal.mode=mmode.getAttribute('data-mode');renderModal();return;}
  /* folder/server edit + remove are via right-click — see the contextmenu listener */
  const addb=e.target.closest('[data-add]');if(addb){openAddModal(addb.getAttribute('data-add')||'server',addb.getAttribute('data-folder'));return;}
- const grp=e.target.closest('[data-grp]');if(grp){const k=grp.getAttribute('data-grp');ST.collapsed[k]=!folderCollapsed(k);try{localStorage.setItem('lt-collapsed',JSON.stringify(ST.collapsed));}catch(e){}renderSide();return;}
+ const grp=e.target.closest('[data-grp]');if(grp){const k=grp.getAttribute('data-grp');ST.collapsed[k]=!folderCollapsed(k);try{localStorage.setItem('lt-collapsed',JSON.stringify(ST.collapsed));}catch(e){}if(ST.vimNav&&ST.sideCur&&!sideOrder().includes(ST.sideCur))ST.sideCur=sideOrder()[0]||null;renderSide();return;}
  const ovb=e.target.closest('[data-ov]');if(ovb){ST.ovmode=ovb.getAttribute('data-ov');try{localStorage.setItem('lt-ovmode',ST.ovmode);}catch(e){}viewFleet();return;}
  const closeb=e.target.closest('[data-close]');if(closeb){closeSession(closeb.getAttribute('data-close'));return;}
  const sesst=e.target.closest('[data-sess]');if(sesst){attachSession(sesst.getAttribute('data-sess'));return;}
@@ -481,9 +495,101 @@ document.addEventListener('change',e=>{
  else if(e.target.id==='lt-day'){localStorage.setItem('lt-mode',e.target.checked?'day':'night');updateTermThemes();}
 });
 document.addEventListener('keydown',e=>{
+ if($('lt-settings')&&e.key==='Escape'){closeSettings();return;}
  if($('lt-modal')){if(e.key==='Escape'){closeModal();return;}if(e.key==='Enter'&&e.target.classList&&e.target.classList.contains('lt-f-in')&&e.target.tagName!=='SELECT'){e.preventDefault();submitAdd();return;}}
  if(e.target.id==='lt-find-in'){if(e.key==='Enter'){e.preventDefault();doFind(e.shiftKey?-1:1);}else if(e.key==='Escape'){toggleFind(false);}}
 });
+
+/* ---------------- settings: UI zoom + vim navigation ---------------- */
+function refitTerm(){const p=SESS[activeKey(ST.active)];if(p){try{p.fit.fit();}catch(e){}}}
+function applyZoom(){const w=document.querySelector('.lt-window');if(w){const z=ST.zoom||1;w.style.zoom=z;
+  // .lt-window is locked to 100vh/100% under body{overflow:hidden}; pre-shrink it by 1/z so
+  // that after the ×z zoom it still fills the OS window exactly (no clipped status bar / edge).
+  w.style.width=(100/z)+'%';w.style.height=(100/z)+'vh';}
+ const v=$('lt-set-zoom');if(v)v.textContent=Math.round((ST.zoom||1)*100)+'%';setTimeout(refitTerm,30);}
+function setZoom(z){ST.zoom=Math.max(0.7,Math.min(1.6,Math.round(z*20)/20));try{localStorage.setItem('lt-zoom',ST.zoom);}catch(e){}applyZoom();}
+function zoomStep(d){setZoom((ST.zoom||1)+d);}
+function setVim(on){ST.vimNav=!!on;try{localStorage.setItem('lt-vim',on?'1':'0');}catch(e){}if(on&&!ST.sideCur)ST.sideCur=ST.active||sideOrder()[0];renderSide();const b=$('lt-set-vim');if(b)b.classList.toggle('on',ST.vimNav);toast(on?'Vim navigation on — h j k l':'Vim navigation off');}
+function openSettings(){if($('lt-settings')){closeSettings();return;}const el=document.createElement('div');el.id='lt-settings';el.className='lt-modal';el.innerHTML=settingsHtml();(document.querySelector('.lt-window')||document.body).appendChild(el);}
+function closeSettings(){const el=$('lt-settings');if(el)el.remove();}
+function settingsHtml(){return `<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">Settings</b><span class="lt-modal-x" data-setclose="1">✕</span></div>
+ <div class="lt-modal-b">
+  <div class="lt-set-row"><div class="lt-set-lab"><b>Interface size</b><span>Zoom the whole UI. Shortcut: Ctrl&nbsp;+ / Ctrl&nbsp;− / Ctrl&nbsp;0</span></div><div class="lt-zoomctl"><span class="lt-zbtn" data-zoom="-1" title="Zoom out">−</span><b id="lt-set-zoom">${Math.round((ST.zoom||1)*100)}%</b><span class="lt-zbtn" data-zoom="1" title="Zoom in">＋</span></div></div>
+  <div class="lt-set-row"><div class="lt-set-lab"><b>Vim navigation</b><span>Move between panels and tabs with h&nbsp;j&nbsp;k&nbsp;l.</span></div><span class="lt-toggle${ST.vimNav?' on':''}" id="lt-set-vim" data-vimtoggle="1"><i></i></span></div>
+  <div class="lt-set-legend${ST.vimNav?'':' dim'}"><div><kbd>j</kbd><kbd>k</kbd> down / up &nbsp;·&nbsp; <kbd>l</kbd>/<kbd>↵</kbd> open / enter &nbsp;·&nbsp; <kbd>h</kbd> up a folder / sidebar</div><div><kbd>Ctrl</kbd><kbd>h</kbd>/<kbd>l</kbd> switch panel &nbsp;·&nbsp; <kbd>⇧H</kbd>/<kbd>⇧L</kbd> switch tab &nbsp;·&nbsp; <kbd>gg</kbd>/<kbd>G</kbd> top / bottom</div><div>In the Terminal, plain keys go to the shell — use <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>h</kbd>/<kbd>l</kbd> for tabs, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>k</kbd> for sidebar.</div></div>
+ </div>
+ <div class="lt-modal-f"><span class="lt-btn" data-setclose="1">Done</span></div></div>`;}
+
+function sideOrder(){const out=[];(FOLDERS.length?FOLDERS:[{key:'lab'}]).forEach(f=>{if(folderCollapsed(f.key))return;SERVERS.filter(s=>(s.group||'lab')===f.key).forEach(s=>out.push(s.id));});return out;}
+function scrollCur(sel){const el=document.querySelector(sel);if(el&&el.scrollIntoView)el.scrollIntoView({block:'nearest'});}
+function setFocus(which){if(which==='main'&&ST.view!=='server')return;ST.focus=which;if(which==='side'){if(!ST.sideCur)ST.sideCur=ST.active||sideOrder()[0];renderSide();scrollCur('.lt-sv.cur');}else{renderSide();if(ST.tab==='terminal'){const p=SESS[activeKey(ST.active)];if(p)setTimeout(()=>{try{p.term.focus();}catch(e){}},0);}}}
+function cycleTab(dir){if(ST.view!=='server')return;const s=byId[ST.active];if(!s)return;const ks=tabsFor(s).map(t=>t[0]);let i=ks.indexOf(ST.tab);if(i<0)i=0;ST.tab=ks[(i+dir+ks.length)%ks.length];ST.sel=null;ST.focus='main';renderHeadTabs();renderView();}
+function vimMove(dir){
+ if(ST.view==='fleet'||ST.focus==='side'){const ord=sideOrder();if(!ord.length)return;
+  let i=ord.indexOf(ST.sideCur);
+  if(i<0){ // cursor's folder was collapsed — snap to the nearest still-visible server by full order
+   const full=SERVERS.map(s=>s.id),fp=full.indexOf(ST.sideCur);
+   if(fp<0){i=dir>0?0:ord.length-1;}
+   else if(dir>0){i=ord.findIndex(id=>full.indexOf(id)>=fp);if(i<0)i=ord.length-1;}
+   else{i=0;for(let n=ord.length-1;n>=0;n--){if(full.indexOf(ord[n])<=fp){i=n;break;}}}
+  }else{i=Math.max(0,Math.min(ord.length-1,i+dir));}
+  ST.sideCur=ord[i];if(ST.focus!=='side'&&ST.view!=='fleet')ST.focus='side';renderSide();scrollCur('.lt-sv.cur');return;}
+ if(ST.tab==='explorer'){const items=ST._exItems||[];if(!items.length)return;let i=ST.sel?items.findIndex(r=>r.name===ST.sel.name):-1;i=i<0?(dir>0?0:items.length-1):Math.max(0,Math.min(items.length-1,i+dir));const r=items[i];ST.sel={name:r.name,dir:r.isdir,size:r.size,mtime:r.mtime};renderExplorer();scrollCur('.lt-fr.sel');return;}
+ if(ST.tab==='monitor'){const v=$('lt-view');if(v)v.scrollBy({top:dir*90});}
+}
+function vimEnter(){
+ if(ST.view==='fleet'||ST.focus==='side'){if(ST.sideCur)openServer(ST.sideCur);return;}
+ if(ST.tab==='explorer'&&ST.sel&&ST.sel.dir){const cur=ST.cwd[ST.active]||'/';ST.cwd[ST.active]=joinp(cur,ST.sel.name);(ST.navFwd||(ST.navFwd={}))[ST.active]=[];ST.sel=null;ST.filter='';loadDir(ST.active,ST.cwd[ST.active]);}
+}
+function vimLeft(){
+ if(ST.focus==='main'&&ST.tab==='explorer'){const cur=ST.cwd[ST.active]||'/';const par=(ST.listing&&ST.listing.parent)||parentOf(cur);if(par&&par!==cur){ST.sel=null;loadDir(ST.active,par);return;}}
+ setFocus('side');
+}
+function vimJump(where){
+ if(ST.view==='fleet'||ST.focus==='side'){const ord=sideOrder();if(!ord.length)return;ST.sideCur=where==='top'?ord[0]:ord[ord.length-1];renderSide();scrollCur('.lt-sv.cur');return;}
+ if(ST.tab==='explorer'){const items=ST._exItems||[];if(!items.length)return;const r=where==='top'?items[0]:items[items.length-1];ST.sel={name:r.name,dir:r.isdir,size:r.size,mtime:r.mtime};renderExplorer();scrollCur('.lt-fr.sel');}
+}
+function vimKey(e){
+ const t=e.target,tag=(t.tagName||'').toUpperCase();
+ const inTerm=ST.view==='server'&&ST.tab==='terminal';
+ const editing=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||t.isContentEditable;
+ const formInput=editing&&!(inTerm&&tag==='TEXTAREA');  // a real form field, not the terminal's textarea
+ // global shortcuts (work regardless of vim setting) — but never steal from a form field
+ if(e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey&&!formInput){
+  if(e.key===','){e.preventDefault();openSettings();return;}
+  if(e.key==='='||e.key==='+'){e.preventDefault();zoomStep(0.05);return;}
+  if(e.key==='-'||e.key==='_'){e.preventDefault();zoomStep(-0.05);return;}
+  if(e.key==='0'){e.preventDefault();setZoom(1);return;}
+ }
+ if(!ST.vimNav)return;
+ if($('lt-modal')||$('lt-settings')||$('lt-prompt')||$('lt-sendto')||$('lt-ctx'))return;  // a dialog/menu owns the keys
+ // Ctrl+Alt combos: terminal-safe (no shell/editor binds these), so they work everywhere
+ if(e.ctrlKey&&e.altKey&&!e.shiftKey&&!e.metaKey){const k=(e.key||'').toLowerCase();
+  if(k==='h'||e.key==='ArrowLeft'){e.preventDefault();cycleTab(-1);return;}
+  if(k==='l'||e.key==='ArrowRight'){e.preventDefault();cycleTab(1);return;}
+  if(k==='k'){e.preventDefault();setFocus('side');return;}
+  if(k==='j'){e.preventDefault();setFocus('main');return;}
+ }
+ if(editing||inTerm||e.metaKey)return;  // don't steal keys from typing or the shell
+ if(e.shiftKey&&!e.ctrlKey&&!e.altKey){
+  if(e.key==='H'){e.preventDefault();cycleTab(-1);return;}
+  if(e.key==='L'){e.preventDefault();cycleTab(1);return;}
+  if(e.key==='G'){e.preventDefault();vimJump('bottom');return;}
+  return;
+ }
+ if(e.ctrlKey&&!e.altKey&&!e.shiftKey){
+  if(e.key==='h'){e.preventDefault();setFocus('side');return;}
+  if(e.key==='l'){e.preventDefault();setFocus('main');return;}
+  return;
+ }
+ if(e.ctrlKey||e.altKey)return;
+ if(e.key==='j'){e.preventDefault();vimMove(1);}
+ else if(e.key==='k'){e.preventDefault();vimMove(-1);}
+ else if(e.key==='h'){e.preventDefault();vimLeft();}
+ else if(e.key==='l'||e.key==='Enter'){e.preventDefault();vimEnter();}
+ else if(e.key==='g'){e.preventDefault();const n=performance.now();if(ST._lastG&&n-ST._lastG<600){ST._lastG=0;vimJump('top');}else ST._lastG=n;}
+}
+document.addEventListener('keydown',vimKey,true);  // capture phase: beat xterm for the Ctrl+Alt combos
 
 /* ---------------- init + polling ---------------- */
 function applyTheme(){const pal=localStorage.getItem('lt-pal')||'sol',mode=localStorage.getItem('lt-mode')||'day';const p=$('th-'+pal);if(p)p.checked=true;$('lt-day').checked=(mode!=='night');}
@@ -498,20 +604,25 @@ async function poll(){
   else{renderHeadTabs();if(ST.tab==='monitor')viewMonitor();}
  }catch(e){$('lt-conn').textContent='backend unreachable';}
 }
+// self-rescheduling loop: the next poll is queued only AFTER the current one resolves, so a
+// slow /api/fleet can never stack overlapping requests (which used to storm the sshds).
+function pollLoop(){Promise.resolve(poll()).catch(()=>{}).finally(()=>{clearTimeout(ST._pollT);ST._pollT=setTimeout(pollLoop,5000);});}
 async function init(){
  applyTheme();
+ ST.vimNav=localStorage.getItem('lt-vim')==='1';
+ const z=parseFloat(localStorage.getItem('lt-zoom'));if(z>=0.7&&z<=1.6)ST.zoom=z;applyZoom();
  try{ST.collapsed=JSON.parse(localStorage.getItem('lt-collapsed')||'{}')||{};}catch(e){}
  ST.ovmode=localStorage.getItem('lt-ovmode')||'grid';
  try{const[sv,fo]=await Promise.all([api('/api/servers'),api('/api/folders')]);SERVERS=sv;FOLDERS=fo;}catch(e){$('lt-view').innerHTML='<div class="lt-empty">Backend not reachable — is the server running?<br>'+esc(String(e))+'</div>';return;}
  byId=Object.fromEntries(SERVERS.map(s=>[s.id,s]));SIDX=Object.fromEntries(SERVERS.map((s,i)=>[s.id,i]));
- ST.active=SERVERS[0]&&SERVERS[0].id;
- renderAll();poll();setInterval(poll,5000);startXfer();
- document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});  // fresh data the moment we're shown again
+ ST.active=SERVERS[0]&&SERVERS[0].id;ST.sideCur=ST.active;
+ renderAll();startXfer();pollLoop();
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden){clearTimeout(ST._pollT);pollLoop();}});  // fresh data the moment we're shown again
 }
 /* frameless window controls (Tauri global API) */
 document.addEventListener('click',e=>{const wc=e.target.closest('[data-wc]');if(!wc)return;const T=window.__TAURI__;if(T&&T.window){const w=T.window.getCurrentWindow();const a=wc.getAttribute('data-wc');if(a==='min')w.minimize();else if(a==='max')w.toggleMaximize();else if(a==='close')w.close();}});
 /* drag the frameless window by the titlebar (explicit startDragging — auto drag-region isn't injected for an external-URL window) */
-const _wcSel='.lt-wc,.lt-theme,.lt-kbd,button,a,input,select';
+const _wcSel='.lt-wc,.lt-theme,.lt-kbd,.lt-gear,button,a,input,select';
 document.addEventListener('mousedown',e=>{if(e.button!==0)return;const tb=e.target.closest('.lt-titlebar');if(!tb||e.target.closest(_wcSel))return;const T=window.__TAURI__;if(T&&T.window)T.window.getCurrentWindow().startDragging();});
 document.addEventListener('dblclick',e=>{const tb=e.target.closest('.lt-titlebar');if(!tb||e.target.closest(_wcSel))return;const T=window.__TAURI__;if(T&&T.window)T.window.getCurrentWindow().toggleMaximize();});
 init();

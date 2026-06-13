@@ -405,5 +405,25 @@ body{margin:0;height:100%;overflow:hidden;background:#02232c;font-family:'Hanken
 .lt-btn:hover{filter:brightness(1.08)}
 .lt-btn.ghost{background:transparent;color:var(--tx2);border-color:var(--hair2)}
 .lt-btn.ghost:hover{color:var(--tx);border-color:var(--tx2);filter:none}
+
+/* settings: titlebar gear, vim cursor, zoom + toggle controls */
+.lt-gear{font-size:14px;color:var(--tx2);cursor:pointer;padding:3px 7px;border-radius:7px;user-select:none;line-height:1}
+.lt-gear:hover{color:var(--acc);background:var(--hov)}
+.lt-sv.cur{border-color:var(--acc);box-shadow:inset 2px 0 0 0 var(--acc)}
+.lt-set-row{display:flex;align-items:center;gap:14px;padding:13px 2px;border-bottom:1px solid var(--hair)}
+.lt-set-lab{flex:1}
+.lt-set-lab b{display:block;font-family:var(--f-display);font-size:13px;color:var(--tx);font-weight:600;margin-bottom:2px}
+.lt-set-lab span{font-size:11px;color:var(--dim);line-height:1.45}
+.lt-zoomctl{display:flex;align-items:center;gap:10px}
+.lt-zoomctl b{font-family:var(--f-mono);font-size:12px;color:var(--tx);min-width:44px;text-align:center}
+.lt-zbtn{width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--hair2);border-radius:7px;color:var(--tx2);cursor:pointer;font-size:14px;user-select:none}
+.lt-zbtn:hover{color:var(--acc);border-color:var(--acc)}
+.lt-toggle{width:42px;height:24px;border-radius:13px;background:var(--barbg);border:1px solid var(--hair2);position:relative;cursor:pointer;transition:background .15s,border-color .15s;flex:none}
+.lt-toggle i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--dim);transition:left .15s,background .15s}
+.lt-toggle.on{background:color-mix(in srgb,var(--acc) 30%,transparent);border-color:var(--acc)}
+.lt-toggle.on i{left:20px;background:var(--acc)}
+.lt-set-legend{margin-top:13px;padding:12px;background:var(--bg);border:1px solid var(--hair);border-radius:9px;display:flex;flex-direction:column;gap:7px;font-size:11px;color:var(--tx2);line-height:1.5}
+.lt-set-legend.dim{opacity:.42}
+.lt-set-legend kbd{font-family:var(--f-mono);font-size:10px;color:var(--tx);background:var(--panel);border:1px solid var(--hair2);border-bottom-width:2px;border-radius:5px;padding:1px 5px;margin:0 1px}
 /* devicon file glyphs in the explorer */
 .lt-di{font-style:normal;font-size:14px;width:16px;line-height:1;text-align:center;flex:none}

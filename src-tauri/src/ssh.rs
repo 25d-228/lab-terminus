@@ -2,6 +2,7 @@
 //! Provides: fleet/status (one combined GATHER exec, parsed), SFTP directory listing,
 //! and command exec with cwd tracking. Connections are per-request for now (a pool comes later).
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -62,9 +63,12 @@ fn key_path() -> std::path::PathBuf {
 }
 
 pub(crate) async fn connect(s: &Server) -> Result<Handle<Client>, String> {
-    // one retry: per-request connects occasionally trip sshd connection throttling
+    // one retry ONLY for a genuine transient (sshd throttling drops the handshake).
+    // Never retry a plain timeout — that just doubles the stall on an unreachable host,
+    // which (×6 NAT-unreachable duplicates) is what gates the whole fleet scan.
     match connect_once(s).await {
         Ok(h) => Ok(h),
+        Err(e) if e.contains("timed out") => Err(e),
         Err(_) => {
             tokio::time::sleep(Duration::from_millis(400)).await;
             connect_once(s).await
@@ -321,15 +325,15 @@ pub async fn status_for(s: Server) -> serde_json::Value {
 }
 
 static FLEET_CACHE: Mutex<Option<(Instant, Vec<serde_json::Value>)>> = Mutex::new(None);
+// single-flight guard: only ONE fleet scan may run at a time. Overlapping polls return
+// the cached snapshot instead of each launching a fresh set of SSH connects — that pile-up
+// (slowest host gates a ~16s scan, frontend polls every 5s) is what stormed the sshds and
+// made healthy servers flap offline/online.
+static FLEET_REFRESHING: AtomicBool = AtomicBool::new(false);
+const FLEET_TTL: Duration = Duration::from_secs(3);
 
-pub async fn fleet() -> Vec<serde_json::Value> {
-    if let Ok(g) = FLEET_CACHE.lock() {
-        if let Some((t, data)) = g.as_ref() {
-            if t.elapsed() < Duration::from_secs(3) {
-                return data.clone();
-            }
-        }
-    }
+// One concurrent scan of every configured host (reachable + unreachable).
+async fn fleet_scan() -> Vec<serde_json::Value> {
     let servers = config::get().servers.clone();
     let n = servers.len();
     let mut set = tokio::task::JoinSet::new();
@@ -342,10 +346,47 @@ pub async fn fleet() -> Vec<serde_json::Value> {
             out[i] = v;
         }
     }
-    if let Ok(mut g) = FLEET_CACHE.lock() {
-        *g = Some((Instant::now(), out.clone()));
-    }
     out
+}
+
+pub async fn fleet() -> Vec<serde_json::Value> {
+    let snapshot = FLEET_CACHE.lock().ok().and_then(|g| g.clone());
+    if let Some((t, data)) = &snapshot {
+        if t.elapsed() < FLEET_TTL {
+            return data.clone(); // fresh enough
+        }
+    }
+    // Stale or empty. Try to claim the single scan slot; if someone else owns it, serve the
+    // last snapshot (stale-while-revalidate) rather than starting a competing scan.
+    if FLEET_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return snapshot.map(|(_, d)| d).unwrap_or_default();
+    }
+    match snapshot {
+        Some((_, data)) => {
+            // Have stale data: refresh in the background and return the stale snapshot now,
+            // so the HTTP handler never blocks for the ~8s a scan takes.
+            tokio::spawn(async move {
+                let fresh = fleet_scan().await;
+                if let Ok(mut g) = FLEET_CACHE.lock() {
+                    *g = Some((Instant::now(), fresh));
+                }
+                FLEET_REFRESHING.store(false, Ordering::Release);
+            });
+            data
+        }
+        None => {
+            // First call ever — compute synchronously, then release the slot.
+            let fresh = fleet_scan().await;
+            if let Ok(mut g) = FLEET_CACHE.lock() {
+                *g = Some((Instant::now(), fresh.clone()));
+            }
+            FLEET_REFRESHING.store(false, Ordering::Release);
+            fresh
+        }
+    }
 }
 
 // ---------------------------------------------------------------- explorer (sftp)
