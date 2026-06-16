@@ -43,6 +43,11 @@ fn err400(e: String) -> Response {
     (StatusCode::BAD_REQUEST, e).into_response()
 }
 
+/// The 404 returned by every handler when a path's server id isn't in the registry.
+fn unknown_server() -> Response {
+    (StatusCode::NOT_FOUND, "unknown server").into_response()
+}
+
 /// Public view of a server — fixed allowlist (like the prototype's _PUBLIC), so anything
 /// extra a user hand-adds to the config file never leaks through the API.
 fn public(s: &config::Server) -> serde_json::Value {
@@ -108,10 +113,10 @@ async fn fleet() -> impl IntoResponse {
 }
 
 async fn host_status(Path(id): Path<String>) -> Response {
-    match config::find(&id) {
-        Some(s) => Json(ssh::status_for(s).await).into_response(),
-        None => (StatusCode::NOT_FOUND, "unknown server").into_response(),
-    }
+    let Some(s) = config::find(&id) else {
+        return unknown_server();
+    };
+    Json(ssh::status_for(s).await).into_response()
 }
 
 #[derive(Deserialize)]
@@ -121,7 +126,7 @@ struct LsQuery {
 
 async fn ls(Path(id): Path<String>, Query(q): Query<LsQuery>) -> Response {
     let Some(s) = config::find(&id) else {
-        return (StatusCode::NOT_FOUND, "unknown server").into_response();
+        return unknown_server();
     };
     let v = match s.kind.as_str() {
         "wsl" => crate::wsl::ls_dir(&s, q.path.as_deref()).await,
@@ -141,15 +146,15 @@ struct FsBody {
 
 // Reject traversal / control chars at the boundary so no transport can be tricked into
 // escaping the viewed directory, even if the frontend guard is bypassed.
-fn unsafe_path(p: &str) -> bool {
+fn has_unsafe_path(p: &str) -> bool {
     p.split('/').any(|seg| seg == "..") || p.chars().any(|c| c.is_control())
 }
 
 async fn fs_op(Path(id): Path<String>, Json(b): Json<FsBody>) -> Response {
     let Some(s) = config::find(&id) else {
-        return (StatusCode::NOT_FOUND, "unknown server").into_response();
+        return unknown_server();
     };
-    if unsafe_path(&b.path) || b.to.as_deref().is_some_and(unsafe_path) {
+    if has_unsafe_path(&b.path) || b.to.as_deref().is_some_and(has_unsafe_path) {
         return err400("invalid path".into());
     }
     let r = match s.kind.as_str() {
@@ -171,7 +176,7 @@ struct ExecBody {
 
 async fn exec_cmd(Path(id): Path<String>, Json(b): Json<ExecBody>) -> Response {
     let Some(s) = config::find(&id) else {
-        return (StatusCode::NOT_FOUND, "unknown server").into_response();
+        return unknown_server();
     };
     let cwd = b
         .cwd

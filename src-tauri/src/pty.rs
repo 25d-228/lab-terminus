@@ -13,6 +13,11 @@ use tokio::io::AsyncWriteExt;
 use crate::config::{self, Server};
 use crate::ssh;
 
+// Fallback terminal geometry when the client doesn't supply one.
+const DEFAULT_COLS: u16 = 80;
+const DEFAULT_ROWS: u16 = 24;
+const PTY_READ_BUFFER_BYTES: usize = 8192;
+
 #[derive(Deserialize)]
 pub struct PtyQuery {
     pub cols: Option<u16>,
@@ -24,8 +29,8 @@ pub async fn pty_handler(
     Path(id): Path<String>,
     Query(q): Query<PtyQuery>,
 ) -> Response {
-    let cols = q.cols.unwrap_or(80);
-    let rows = q.rows.unwrap_or(24);
+    let cols = q.cols.unwrap_or(DEFAULT_COLS);
+    let rows = q.rows.unwrap_or(DEFAULT_ROWS);
     let Some(s) = config::find(&id) else {
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
@@ -81,10 +86,8 @@ async fn ssh_pty(s: Server, mut socket: WebSocket, cols: u16, rows: u16) {
                 _ => {}
             },
             c = ch.wait() => match c {
-                Some(russh::ChannelMsg::Data { ref data }) => {
-                    if sink.send(Message::Binary(data[..].to_vec().into())).await.is_err() { break; }
-                }
-                Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
+                Some(russh::ChannelMsg::Data { ref data })
+                | Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
                     if sink.send(Message::Binary(data[..].to_vec().into())).await.is_err() { break; }
                 }
                 None => break,
@@ -121,7 +124,7 @@ async fn wsl_pty(socket: WebSocket, cols: u16, rows: u16) {
 
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; PTY_READ_BUFFER_BYTES];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
@@ -156,8 +159,8 @@ async fn wsl_pty(socket: WebSocket, cols: u16, rows: u16) {
                     let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) else { continue; };
                     if v["t"].as_str() != Some("r") { continue; }
                     let _ = master.resize(PtySize {
-                        rows: v["r"].as_u64().unwrap_or(24) as u16,
-                        cols: v["c"].as_u64().unwrap_or(80) as u16,
+                        rows: v["r"].as_u64().unwrap_or(DEFAULT_ROWS as u64) as u16,
+                        cols: v["c"].as_u64().unwrap_or(DEFAULT_COLS as u64) as u16,
                         pixel_width: 0,
                         pixel_height: 0,
                     });

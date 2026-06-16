@@ -96,6 +96,12 @@ const DEFAULT_FOLDERS: &[(&str, &str)] = &[
     ("storage", "Storage"),
 ];
 
+// How many parent directories to climb from the exe looking for a dev config.local.json —
+// deep enough to reach the repo root from target/<profile>/ on any platform.
+const DEV_CONFIG_SEARCH_DEPTH: usize = 6;
+// How often the watcher polls the config file's mtime for hand edits.
+const WATCH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 static STATE: OnceLock<RwLock<Arc<Config>>> = OnceLock::new();
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 static REV: AtomicU64 = AtomicU64::new(1);
@@ -107,7 +113,7 @@ fn dev_path() -> Option<PathBuf> {
     let mut cands: Vec<PathBuf> = vec!["config.local.json".into(), "../config.local.json".into()];
     if let Ok(exe) = std::env::current_exe() {
         let mut dir_cursor = exe.parent().map(|p| p.to_path_buf());
-        for _ in 0..6 {
+        for _ in 0..DEV_CONFIG_SEARCH_DEPTH {
             if let Some(dir) = &dir_cursor {
                 cands.push(dir.join("config.local.json"));
                 dir_cursor = dir.parent().map(|p| p.to_path_buf());
@@ -151,6 +157,21 @@ pub fn path() -> &'static PathBuf {
     })
 }
 
+/// Capitalize each letter that follows a non-letter, like Python's str.title().
+fn titleize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_alpha = false;
+    for c in s.chars() {
+        if c.is_alphabetic() && !prev_alpha {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+        prev_alpha = c.is_alphabetic();
+    }
+    out
+}
+
 fn normalize(mut cfg: Config) -> Config {
     if cfg.folders.is_empty() {
         cfg.folders = DEFAULT_FOLDERS
@@ -173,20 +194,10 @@ fn normalize(mut cfg: Config) -> Config {
             }
         }
     }
-    for g in missing {
-        // Python str.title(): capitalize each letter that follows a non-letter
-        let mut title = String::with_capacity(g.len());
-        let mut prev_alpha = false;
-        for c in g.chars() {
-            if c.is_alphabetic() && !prev_alpha {
-                title.extend(c.to_uppercase());
-            } else {
-                title.push(c);
-            }
-            prev_alpha = c.is_alphabetic();
-        }
+    for group in missing {
+        let title = titleize(&group);
         cfg.folders.push(Folder {
-            key: g,
+            key: group,
             title,
             custom: None,
             extra: Default::default(),
@@ -285,7 +296,7 @@ pub fn start_watcher() {
         let mtime = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
         let mut last = mtime(&p);
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(WATCH_POLL_INTERVAL);
             let now = mtime(&p);
             if now != last {
                 last = now;
@@ -386,25 +397,25 @@ pub fn remove_folder(key: &str) -> Result<(), String> {
     })
 }
 
-pub fn add_server(d: &serde_json::Value) -> Result<Server, String> {
-    let name = d["name"].as_str().unwrap_or("").trim().to_string();
+pub fn add_server(fields: &serde_json::Value) -> Result<Server, String> {
+    let name = fields["name"].as_str().unwrap_or("").trim().to_string();
     if name.is_empty() {
         return Err("server name required".into());
     }
     mutate(|cfg| {
         let taken: Vec<String> = cfg.servers.iter().map(|s| s.id.clone()).collect();
-        let gets =
-            |k: &str| d[k].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let trimmed_field =
+            |k: &str| fields[k].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let s = Server {
             id: unique(&slug(&name), &taken),
             name,
-            kind: gets("kind").unwrap_or_else(|| "ssh".into()),
-            host: gets("host"),
-            port: parse_port(&d["port"]),
-            user: gets("user"),
-            gpu_label: gets("gpuLabel"),
-            home: gets("home"),
-            group: Some(gets("group").unwrap_or_else(|| "lab".into())),
+            kind: trimmed_field("kind").unwrap_or_else(|| "ssh".into()),
+            host: trimmed_field("host"),
+            port: parse_port(&fields["port"]),
+            user: trimmed_field("user"),
+            gpu_label: trimmed_field("gpuLabel"),
+            home: trimmed_field("home"),
+            group: Some(trimmed_field("group").unwrap_or_else(|| "lab".into())),
             custom: Some(true),
             extra: Default::default(),
         };
@@ -413,37 +424,37 @@ pub fn add_server(d: &serde_json::Value) -> Result<Server, String> {
     })
 }
 
-pub fn edit_server(sid: &str, d: &serde_json::Value) -> Result<Server, String> {
+pub fn edit_server(sid: &str, fields: &serde_json::Value) -> Result<Server, String> {
     mutate(|cfg| {
         let s = cfg
             .servers
             .iter_mut()
             .find(|s| s.id == sid)
             .ok_or("unknown server")?;
-        let gets = |k: &str| d[k].as_str().map(|v| v.trim().to_string());
-        if let Some(n) = gets("name").filter(|n| !n.is_empty()) {
+        let trimmed_field = |k: &str| fields[k].as_str().map(|v| v.trim().to_string());
+        if let Some(n) = trimmed_field("name").filter(|n| !n.is_empty()) {
             s.name = n;
         }
-        if let Some(k) = gets("kind").filter(|k| !k.is_empty()) {
+        if let Some(k) = trimmed_field("kind").filter(|k| !k.is_empty()) {
             s.kind = k;
         }
-        for (key, field) in [("host", &mut s.host), ("user", &mut s.user)] {
-            if let Some(v) = gets(key) {
+        // Each present key sets its field; an empty string clears it to None.
+        for (key, field) in [
+            ("host", &mut s.host),
+            ("user", &mut s.user),
+            ("gpuLabel", &mut s.gpu_label),
+            ("home", &mut s.home),
+        ] {
+            if let Some(v) = trimmed_field(key) {
                 *field = if v.is_empty() { None } else { Some(v) };
             }
         }
-        if let Some(v) = gets("gpuLabel") {
-            s.gpu_label = if v.is_empty() { None } else { Some(v) };
-        }
-        if let Some(v) = gets("home") {
-            s.home = if v.is_empty() { None } else { Some(v) };
-        }
-        if let Some(v) = gets("group").filter(|v| !v.is_empty()) {
+        if let Some(v) = trimmed_field("group").filter(|v| !v.is_empty()) {
             s.group = Some(v);
         }
         // "port" present → set (invalid/empty clears, like the prototype); absent → keep
-        if d.as_object().is_some_and(|o| o.contains_key("port")) {
-            s.port = parse_port(&d["port"]);
+        if fields.as_object().is_some_and(|o| o.contains_key("port")) {
+            s.port = parse_port(&fields["port"]);
         }
         Ok(s.clone())
     })

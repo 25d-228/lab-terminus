@@ -22,6 +22,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{config, nas, ssh};
 
 const CHUNK: usize = 1 << 20; // 1 MiB
+const MAX_CONCURRENT_COPIES: usize = 3;
+const NAS_PUMP_BUFFER_CHUNKS: usize = 4;
+
+// Out-of-band marker carried through the Result error channel to tell a user cancellation
+// apart from a real failure (see copy_worker / upload result handling).
+const CANCELED_SENTINEL: &str = "__canceled";
+
+/// Job lifecycle states, surfaced verbatim in the public JSON. Named so a comparison or
+/// assignment can't silently typo (e.g. "cancelled") and never match.
+mod job_state {
+    pub const QUEUED: &str = "queued";
+    pub const ACTIVE: &str = "active";
+    pub const DONE: &str = "done";
+    pub const ERROR: &str = "error";
+    pub const CANCELED: &str = "canceled";
+}
 
 // ---------------------------------------------------------------- job registry
 #[derive(Clone)]
@@ -31,7 +47,7 @@ pub struct Job {
     pub label: String,
     pub total: u64,
     pub done: u64,
-    pub state: &'static str, // queued | active | done | error | canceled
+    pub state: &'static str, // one of the job_state constants
     pub error: Option<String>,
     pub speed: f64,
     pub ts: f64,
@@ -63,7 +79,7 @@ fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
-fn mkjob(kind: &'static str, label: String, total: u64) -> (String, Arc<AtomicBool>) {
+fn create_job(kind: &'static str, label: String, total: u64) -> (String, Arc<AtomicBool>) {
     let id = format!("{:x}{:x}", SEQ.fetch_add(1, Ordering::Relaxed), now() as u64);
     let cancel = Arc::new(AtomicBool::new(false));
     let job = Job {
@@ -72,7 +88,7 @@ fn mkjob(kind: &'static str, label: String, total: u64) -> (String, Arc<AtomicBo
         label,
         total,
         done: 0,
-        state: "queued",
+        state: job_state::QUEUED,
         error: None,
         speed: 0.0,
         ts: now(),
@@ -108,7 +124,7 @@ fn add_progress(id: &str, n: u64) {
 /// snap it up to the bytes actually moved if progress overshot it.
 fn mark_done(id: &str) {
     update(id, |j| {
-        j.state = "done";
+        j.state = job_state::DONE;
         if j.total < j.done {
             j.total = j.done;
         }
@@ -116,7 +132,7 @@ fn mark_done(id: &str) {
 }
 
 // ---------------------------------------------------------------- io endpoints per kind
-async fn sftp_for(s: &config::Server) -> Result<russh_sftp::client::SftpSession, String> {
+async fn open_sftp_session(s: &config::Server) -> Result<russh_sftp::client::SftpSession, String> {
     let handle = ssh::connect(s).await?;
     let ch = handle
         .channel_open_session()
@@ -148,7 +164,7 @@ impl Reader {
 async fn open_reader(s: &config::Server, path: &str) -> Result<(Reader, u64), String> {
     match s.kind.as_str() {
         "ssh" => {
-            let sftp = sftp_for(s).await?;
+            let sftp = open_sftp_session(s).await?;
             let total = sftp
                 .metadata(path)
                 .await
@@ -195,14 +211,15 @@ async fn copy_to_nas_streamed(
     name: &str,
     total: u64,
 ) -> Result<(), String> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(4);
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(NAS_PUMP_BUFFER_CHUNKS);
     let cid = id.to_string();
     let pump = tokio::spawn(async move {
         let mut buf = vec![0u8; CHUNK];
         loop {
             if cancel.load(Ordering::Relaxed) {
                 let _ = tx.send(Err(std::io::Error::other("canceled"))).await;
-                return Err("__canceled".to_string());
+                return Err(CANCELED_SENTINEL.to_string());
             }
             match reader.read_chunk(&mut buf).await {
                 Ok(0) => return Ok(()),
@@ -244,13 +261,13 @@ async fn write_ssh_streamed(
     dst_dir: &str,
     name: &str,
 ) -> Result<(), String> {
-    let sftp = sftp_for(dst).await?;
+    let sftp = open_sftp_session(dst).await?;
     let dst_path = format!("{}/{}", dst_dir.trim_end_matches('/'), name);
     let mut out = sftp.create(&dst_path).await.map_err(|e| e.to_string())?;
     let mut buf = vec![0u8; CHUNK];
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err("__canceled".into());
+            return Err(CANCELED_SENTINEL.into());
         }
         let n = reader.read_chunk(&mut buf).await?;
         if n == 0 {
@@ -273,14 +290,14 @@ async fn copy_worker(
 ) {
     static SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
     let _permit = SLOTS
-        .get_or_init(|| tokio::sync::Semaphore::new(3))
+        .get_or_init(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_COPIES))
         .acquire()
         .await;
     if cancel.load(Ordering::Relaxed) {
-        update(&id, |j| j.state = "canceled");
+        update(&id, |j| j.state = job_state::CANCELED);
         return;
     }
-    update(&id, |j| j.state = "active");
+    update(&id, |j| j.state = job_state::ACTIVE);
     let name = basename(&src_path);
     let result: Result<(), String> = async {
         let (mut reader, total) = open_reader(&src, &src_path).await?;
@@ -300,7 +317,7 @@ async fn copy_worker(
                     let mut buf = vec![0u8; CHUNK];
                     loop {
                         if cancel.load(Ordering::Relaxed) {
-                            return Err("__canceled".into());
+                            return Err(CANCELED_SENTINEL.into());
                         }
                         let n = reader.read_chunk(&mut buf).await?;
                         if n == 0 {
@@ -319,9 +336,9 @@ async fn copy_worker(
     .await;
     match result {
         Ok(()) => mark_done(&id),
-        Err(e) if e == "__canceled" => update(&id, |j| j.state = "canceled"),
+        Err(e) if e == CANCELED_SENTINEL => update(&id, |j| j.state = job_state::CANCELED),
         Err(e) => update(&id, |j| {
-            j.state = "error";
+            j.state = job_state::ERROR;
             j.error = Some(e);
         }),
     }
@@ -338,7 +355,7 @@ pub async fn cancel(Path(jid): Path<String>) -> impl IntoResponse {
     let ok = {
         let map = jobs().lock().unwrap();
         match map.get(&jid) {
-            Some(j) if j.state == "queued" || j.state == "active" => {
+            Some(j) if j.state == job_state::QUEUED || j.state == job_state::ACTIVE => {
                 j.cancel.store(true, Ordering::Relaxed);
                 true
             }
@@ -352,7 +369,7 @@ pub async fn clear() -> impl IntoResponse {
     jobs()
         .lock()
         .unwrap()
-        .retain(|_, j| j.state == "queued" || j.state == "active");
+        .retain(|_, j| j.state == job_state::QUEUED || j.state == job_state::ACTIVE);
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -383,7 +400,7 @@ pub async fn copy(Json(b): Json<CopyBody>) -> Response {
         basename(&b.src.path),
         dst.name
     );
-    let (id, cancel) = mkjob("copy", label, b.src.size.unwrap_or(0));
+    let (id, cancel) = create_job("copy", label, b.src.size.unwrap_or(0));
     let (sp, dp) = (b.src.path.clone(), b.dst.path.clone());
     tokio::spawn(copy_worker(id.clone(), cancel, src, sp, dst, dp));
     let j = jobs().lock().unwrap().get(&id).map(|j| j.public());
@@ -464,16 +481,16 @@ pub async fn upload(Path(id): Path<String>, Query(q): Query<UpQuery>, req: Reque
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let (id_job, cancel) = mkjob("upload", format!("↑ {}  →  {}", q.name, s.name), total);
-    update(&id_job, |j| j.state = "active");
+    let (id_job, cancel) = create_job("upload", format!("↑ {}  →  {}", q.name, s.name), total);
+    update(&id_job, |j| j.state = job_state::ACTIVE);
     let result: Result<(), String> = async {
-        let sftp = sftp_for(&s).await?;
+        let sftp = open_sftp_session(&s).await?;
         let dst = format!("{}/{}", q.path.trim_end_matches('/'), q.name);
         let mut out = sftp.create(&dst).await.map_err(|e| e.to_string())?;
         let mut stream = req.into_body().into_data_stream();
         while let Some(chunk) = stream.try_next().await.map_err(|e| e.to_string())? {
             if cancel.load(Ordering::Relaxed) {
-                return Err("__canceled".into());
+                return Err(CANCELED_SENTINEL.into());
             }
             out.write_all(&chunk).await.map_err(|e| e.to_string())?;
             add_progress(&id_job, chunk.len() as u64);
@@ -489,12 +506,12 @@ pub async fn upload(Path(id): Path<String>, Query(q): Query<UpQuery>, req: Reque
             Json(serde_json::json!({"ok": true, "job": j})).into_response()
         }
         Err(e) => {
-            let canceled = e == "__canceled";
+            let canceled = e == CANCELED_SENTINEL;
             update(&id_job, |j| {
                 if canceled {
-                    j.state = "canceled";
+                    j.state = job_state::CANCELED;
                 } else {
-                    j.state = "error";
+                    j.state = job_state::ERROR;
                     j.error = Some(e.clone());
                 }
             });

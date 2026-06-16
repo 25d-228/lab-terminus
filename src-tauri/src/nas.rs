@@ -7,15 +7,24 @@ use crate::ssh::{es, offline, parent_of};
 // (base url, sid) of the DSM endpoint that actually answered — probed at login.
 static SESSION: Mutex<Option<(String, String)>> = Mutex::new(None);
 
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+// Each DSM request gets one retry: attempt 0, then a re-login + attempt 1.
+const MAX_ATTEMPTS: usize = 2;
+// Poll a DSM delete task up to DELETE_POLL_MAX times, DELETE_POLL_INTERVAL apart (~15s budget).
+const DELETE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+const DELETE_POLL_MAX: u32 = 30;
+// DSM session-expired / invalid-sid error codes that warrant a re-login + retry.
+const RELOGIN_CODES: [i64; 3] = [105, 106, 119];
+
 fn http() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(HTTP_TIMEOUT)
         .build()
         .unwrap_or_default()
 }
 
 /// Candidate DSM base urls: the primary host, then the optional LAN host (NAT hairpin).
-fn bases() -> Result<Vec<String>, String> {
+fn base_urls() -> Result<Vec<String>, String> {
     let cfg = config::get();
     let nas = cfg.nas.as_ref().ok_or("no nas config")?;
     let mut urls = vec![format!("{}://{}:{}/webapi", nas.scheme, nas.host, nas.port)];
@@ -34,18 +43,18 @@ fn coerce_i64(v: &serde_json::Value) -> i64 {
 
 async fn login() -> Result<(String, String), String> {
     let cfg = config::get();
-    let n = cfg.nas.as_ref().ok_or("no nas config")?.clone();
-    let mut last = String::from("no nas endpoints");
-    for base in bases()? {
-        let r: Result<serde_json::Value, String> = async {
+    let nas = cfg.nas.as_ref().ok_or("no nas config")?.clone();
+    let mut last_error = String::from("no nas endpoints");
+    for base in base_urls()? {
+        let response: Result<serde_json::Value, String> = async {
             http()
                 .get(format!("{base}/auth.cgi"))
                 .query(&[
                     ("api", "SYNO.API.Auth"),
                     ("version", "3"),
                     ("method", "login"),
-                    ("account", n.account.as_str()),
-                    ("passwd", n.passwd.as_str()),
+                    ("account", nas.account.as_str()),
+                    ("passwd", nas.passwd.as_str()),
                     ("session", "FileStation"),
                     ("format", "sid"),
                 ])
@@ -57,20 +66,20 @@ async fn login() -> Result<(String, String), String> {
                 .map_err(es)
         }
         .await;
-        match r {
-            Ok(r) if r["success"].as_bool() == Some(true) => {
-                let sid = r["data"]["sid"]
+        match response {
+            Ok(body) if body["success"].as_bool() == Some(true) => {
+                let sid = body["data"]["sid"]
                     .as_str()
                     .ok_or("NAS login: no sid")?
                     .to_string();
                 *SESSION.lock().unwrap() = Some((base.clone(), sid.clone()));
                 return Ok((base, sid));
             }
-            Ok(r) => last = format!("NAS login failed: {}", r["error"]),
-            Err(e) => last = e,
+            Ok(body) => last_error = format!("NAS login failed: {}", body["error"]),
+            Err(e) => last_error = e,
         }
     }
-    Err(last)
+    Err(last_error)
 }
 
 /// The active (base url, sid), reusing the cached session or logging in if there is none.
@@ -93,20 +102,20 @@ async fn api_call(
     // current_session() drops the std Mutex guard before any .await (a guard held across
     // await makes the future !Send, which axum handlers reject).
     let (mut base, mut sid) = current_session().await?;
-    for attempt in 0..2 {
-        let mut q: Vec<(&str, &str)> = vec![
+    for attempt in 0..MAX_ATTEMPTS {
+        let mut query_params: Vec<(&str, &str)> = vec![
             ("api", api),
             ("version", version),
             ("method", method),
             ("_sid", sid.as_str()),
         ];
-        q.extend_from_slice(extra);
+        query_params.extend_from_slice(extra);
         let resp = http()
             .get(format!("{base}/entry.cgi"))
-            .query(&q)
+            .query(&query_params)
             .send()
             .await;
-        let r: serde_json::Value = match resp {
+        let body: serde_json::Value = match resp {
             Ok(resp) => resp.json().await.map_err(es)?,
             Err(e) if attempt == 0 => {
                 // transport failure (e.g. switched networks) — re-probe endpoints once
@@ -116,15 +125,15 @@ async fn api_call(
             }
             Err(e) => return Err(es(e)),
         };
-        if r["success"].as_bool() == Some(true) {
-            return Ok(r["data"].clone());
+        if body["success"].as_bool() == Some(true) {
+            return Ok(body["data"].clone());
         }
-        let code = r["error"]["code"].as_i64().unwrap_or(0);
-        if matches!(code, 105 | 106 | 119) && attempt == 0 {
+        let code = body["error"]["code"].as_i64().unwrap_or(0);
+        if RELOGIN_CODES.contains(&code) && attempt == 0 {
             (base, sid) = login().await?;
             continue;
         }
-        return Err(format!("NAS {api}.{method} error: {}", r["error"]));
+        return Err(format!("NAS {api}.{method} error: {}", body["error"]));
     }
     Err("NAS API failed".into())
 }
@@ -132,7 +141,7 @@ async fn api_call(
 /// Stream a file off the NAS (DSM FileStation Download). Returns the raw HTTP response.
 pub async fn download(path: &str) -> Result<reqwest::Response, String> {
     let (base, sid) = current_session().await?;
-    for attempt in 0..2 {
+    for attempt in 0..MAX_ATTEMPTS {
         let r = http()
             .get(format!("{base}/entry.cgi"))
             .query(&[
@@ -179,6 +188,7 @@ pub async fn upload(
         .text("create_parents", "true")
         .text("overwrite", if overwrite { "true" } else { "false" })
         .part("file", part);
+    // Dedicated client with no timeout: a large streamed upload would blow http()'s 8s budget.
     let r: serde_json::Value = reqwest::Client::builder()
         .build()
         .map_err(es)?
@@ -309,8 +319,8 @@ pub async fn fs_op(_s: &Server, op: &str, path: &str, to: Option<&str>) -> Resul
             )
             .await?;
             let taskid = data["taskid"].as_str().unwrap_or_default().to_string();
-            for _ in 0..30 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            for _ in 0..DELETE_POLL_MAX {
+                tokio::time::sleep(DELETE_POLL_INTERVAL).await;
                 // poll version must match the start call (2) — some DSM builds reject v1
                 let st = api_call(
                     "SYNO.FileStation.Delete",

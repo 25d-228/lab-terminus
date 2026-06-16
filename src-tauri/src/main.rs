@@ -16,37 +16,40 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
+// Headless mode (LT_HEADLESS=1) serves the API on this fixed loopback address for testing.
+const HEADLESS_ADDR: &str = "127.0.0.1:8766";
+
 /// Open the OS file manager with the config file selected.
 fn reveal_config() {
-    let p = config::path();
+    let config_path = config::path();
     #[cfg(target_os = "windows")]
     {
         // raw_arg: Command::arg would quote the WHOLE "/select,path" token when the path
         // has spaces, which makes Explorer ignore /select and open Documents instead.
         use std::os::windows::process::CommandExt;
         let _ = std::process::Command::new("explorer.exe")
-            .raw_arg(format!("/select,\"{}\"", p.display()))
+            .raw_arg(format!("/select,\"{}\"", config_path.display()))
             .spawn();
     }
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open")
-            .args(["-R", &p.display().to_string()])
+            .args(["-R", &config_path.display().to_string()])
             .spawn();
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Some(dir) = p.parent() {
+        if let Some(dir) = config_path.parent() {
             let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
         }
     }
 }
 
 fn show_main(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
     }
 }
 
@@ -173,7 +176,7 @@ fn main() {
             });
 
             let url = format!("http://127.0.0.1:{port}/");
-            let mut wb = tauri::WebviewWindowBuilder::new(
+            let mut window_builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::External(url.parse().expect("url")),
@@ -205,17 +208,17 @@ fn main() {
             // and keep the custom buttons.
             #[cfg(target_os = "macos")]
             {
-                wb = wb
+                window_builder = window_builder
                     .title_bar_style(tauri::TitleBarStyle::Overlay)
                     .hidden_title(true)
                     .traffic_light_position(tauri::LogicalPosition::new(14.0, 22.0));
             }
             #[cfg(not(target_os = "macos"))]
             {
-                wb = wb.decorations(false);
+                window_builder = window_builder.decorations(false);
             }
 
-            wb.build()?;
+            window_builder.build()?;
 
             // system tray: close-to-tray lives here
             build_tray(app.handle())?;
@@ -243,10 +246,10 @@ fn main() {
 #[tokio::main(flavor = "current_thread")]
 async fn run_headless() {
     config::start_watcher();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8766")
+    let listener = tokio::net::TcpListener::bind(HEADLESS_ADDR)
         .await
-        .expect("bind 127.0.0.1:8766");
-    println!("[headless] Lab Terminus API on http://127.0.0.1:8766");
+        .expect("bind headless port");
+    println!("[headless] Lab Terminus API on http://{HEADLESS_ADDR}");
     if let Err(e) = axum::serve(listener, server::router()).await {
         eprintln!("[headless] {e}");
     }

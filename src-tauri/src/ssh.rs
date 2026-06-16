@@ -33,6 +33,10 @@ pub(crate) fn es<E: std::fmt::Display>(e: E) -> String {
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const EXEC_TIMEOUT: Duration = Duration::from_secs(25);
 
+// Marker printed after a command's output so exec_cmd can recover the shell's resulting cwd
+// (the `cd` may have moved it). Shared with the WSL backend, which runs the same protocol.
+pub(crate) const CWD_MARKER: &str = "@@CWD@@";
+
 pub(crate) struct Client;
 
 impl client::Handler for Client {
@@ -175,19 +179,19 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
     }
 }
 
-fn numf(s: &str) -> f64 {
+fn parse_f64_or_zero(s: &str) -> f64 {
     s.parse::<f64>().unwrap_or(0.0)
 }
 
 fn parse_disks(lines: &[String]) -> Vec<serde_json::Value> {
     let mut disks = Vec::new();
-    for ln in lines {
-        let p: Vec<&str> = ln.split_whitespace().collect();
-        if p.len() < 3 {
+    for line in lines {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 3 {
             continue;
         }
-        if let (Ok(sz), Ok(us)) = (p[1].parse::<i64>(), p[2].parse::<i64>()) {
-            disks.push(serde_json::json!({"m": p[0], "size": sz, "used": us}));
+        if let (Ok(size), Ok(used)) = (fields[1].parse::<i64>(), fields[2].parse::<i64>()) {
+            disks.push(serde_json::json!({"m": fields[0], "size": size, "used": used}));
         }
     }
     disks
@@ -195,48 +199,63 @@ fn parse_disks(lines: &[String]) -> Vec<serde_json::Value> {
 
 fn parse_gpus(lines: &[String]) -> (Vec<serde_json::Value>, HashMap<String, i64>) {
     let mut gpus = Vec::new();
-    let mut uuidmap: HashMap<String, i64> = HashMap::new();
-    for ln in lines {
-        let c: Vec<String> = ln.split(',').map(|x| x.trim().to_string()).collect();
-        if c.len() < 9 {
+    let mut uuid_to_index: HashMap<String, i64> = HashMap::new();
+    for line in lines {
+        let columns: Vec<String> = line.split(',').map(|x| x.trim().to_string()).collect();
+        if columns.len() < 9 {
             continue;
         }
-        if let Ok(idx) = c[0].parse::<i64>() {
-            uuidmap.insert(c[1].clone(), idx);
+        if let Ok(index) = columns[0].parse::<i64>() {
+            uuid_to_index.insert(columns[1].clone(), index);
             gpus.push(serde_json::json!({
-                "index": idx, "name": c[2],
-                "mu": numf(&c[3]) as i64, "mt": numf(&c[4]) as i64,
-                "util": numf(&c[5]) as i64, "temp": numf(&c[6]) as i64,
-                "pow": numf(&c[7]), "plim": numf(&c[8]) as i64
+                "index": index, "name": columns[2],
+                "mu": parse_f64_or_zero(&columns[3]) as i64, "mt": parse_f64_or_zero(&columns[4]) as i64,
+                "util": parse_f64_or_zero(&columns[5]) as i64, "temp": parse_f64_or_zero(&columns[6]) as i64,
+                "pow": parse_f64_or_zero(&columns[7]), "plim": parse_f64_or_zero(&columns[8]) as i64
             }));
         }
     }
-    (gpus, uuidmap)
+    (gpus, uuid_to_index)
 }
 
 fn parse_ps_map(lines: &[String]) -> HashMap<i64, (String, String, String)> {
-    let mut psmap: HashMap<i64, (String, String, String)> = HashMap::new();
-    for ln in lines {
+    let mut pid_info: HashMap<i64, (String, String, String)> = HashMap::new();
+    for line in lines {
         // Skip any PS line we can't fully tokenize/parse.
-        let Some((pid_s, r)) = next_token(ln) else {
+        let Some((pid_str, rest)) = next_token(line) else {
             continue;
         };
-        let Some((user, r)) = next_token(r) else {
+        let Some((user, rest)) = next_token(rest) else {
             continue;
         };
-        let Some((etime, r)) = next_token(r) else {
+        let Some((etime, rest)) = next_token(rest) else {
             continue;
         };
-        let Ok(pid) = pid_s.parse::<i64>() else {
+        let Ok(pid) = pid_str.parse::<i64>() else {
             continue;
         };
         let etime = etime
             .parse::<i64>()
             .map(fmt_dur)
             .unwrap_or_else(|_| etime.to_string());
-        psmap.insert(pid, (user.to_string(), etime, r.trim_start().to_string()));
+        pid_info.insert(pid, (user.to_string(), etime, rest.trim_start().to_string()));
     }
-    psmap
+    pid_info
+}
+
+// (pid, gpu uuid, used VRAM MiB) for each compute process reported by nvidia-smi.
+fn parse_apps(lines: &[String]) -> Vec<(i64, String, i64)> {
+    let mut apps = Vec::new();
+    for line in lines {
+        let columns: Vec<String> = line.split(',').map(|x| x.trim().to_string()).collect();
+        if columns.len() < 3 {
+            continue;
+        }
+        if let Ok(pid) = columns[0].parse::<i64>() {
+            apps.push((pid, columns[1].clone(), parse_f64_or_zero(&columns[2]) as i64));
+        }
+    }
+    apps
 }
 
 pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
@@ -285,27 +304,18 @@ pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
         }
     };
     let disks = parse_disks(&get("DF"));
-    let (gpus, uuidmap) = parse_gpus(&get("GPU"));
-    let mut apps: Vec<(i64, String, i64)> = Vec::new();
-    for ln in get("APPS") {
-        let c: Vec<String> = ln.split(',').map(|x| x.trim().to_string()).collect();
-        if c.len() < 3 {
-            continue;
-        }
-        if let Ok(pid) = c[0].parse::<i64>() {
-            apps.push((pid, c[1].clone(), numf(&c[2]) as i64));
-        }
-    }
-    let psmap = parse_ps_map(&get("PS"));
+    let (gpus, uuid_to_index) = parse_gpus(&get("GPU"));
+    let apps = parse_apps(&get("APPS"));
+    let ps_by_pid = parse_ps_map(&get("PS"));
     let procs: Vec<serde_json::Value> = apps
         .iter()
         .map(|(pid, uuid, mem)| {
-            let (user, etime, cmd) = psmap
+            let (user, etime, cmd) = ps_by_pid
                 .get(pid)
                 .cloned()
                 .unwrap_or_else(|| ("?".into(), String::new(), String::new()));
             serde_json::json!({
-                "pid": pid, "gpu": uuidmap.get(uuid).copied().unwrap_or(0),
+                "pid": pid, "gpu": uuid_to_index.get(uuid).copied().unwrap_or(0),
                 "mem": mem, "user": user, "etime": etime, "cmd": cmd
             })
         })
@@ -539,9 +549,9 @@ pub(crate) fn shell_quote(s: &str) -> String {
 }
 
 pub(crate) fn split_cwd(out: &str, cwd: &str) -> (String, String) {
-    if let Some(i) = out.rfind("@@CWD@@") {
+    if let Some(i) = out.rfind(CWD_MARKER) {
         let text = out[..i].trim_end_matches('\n').to_string();
-        let newcwd = out[i + 7..].trim().to_string();
+        let newcwd = out[i + CWD_MARKER.len()..].trim().to_string();
         let resolved_cwd = if newcwd.is_empty() {
             cwd.to_string()
         } else {
@@ -555,9 +565,10 @@ pub(crate) fn split_cwd(out: &str, cwd: &str) -> (String, String) {
 
 pub async fn exec_cmd(s: &Server, cwd: &str, cmd: &str) -> Result<(String, String), String> {
     let full = format!(
-        "cd {} 2>/dev/null\n{}\nprintf '\\n@@CWD@@%s' \"$(pwd)\"",
+        "cd {} 2>/dev/null\n{}\nprintf '\\n{}%s' \"$(pwd)\"",
         shell_quote(cwd),
-        cmd
+        cmd,
+        CWD_MARKER
     );
     let handle = connect(s).await?;
     let out = exec_raw(&handle, &full).await?;
