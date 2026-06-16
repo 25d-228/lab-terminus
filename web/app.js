@@ -1,6 +1,15 @@
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
+
+  // Tuning constants (timings in ms).
+  const TOAST_MS = 2600;
+  const TRANSFER_POLL_MS = 1500;
+  const MONITOR_POLL_MS = 2000;
+  const FLEET_POLL_MS = 5000;
+  const TERMINAL_SCROLLBACK = 8000;
+  const MAX_PASTE_BYTES = 512 * 1024;
+  const GPU_HISTORY_SAMPLES = 48;
   function esc(s) {
     const div = document.createElement("div");
     div.textContent = s == null ? "" : String(s);
@@ -35,8 +44,9 @@
     if (mo < 12) return mo + " mo ago";
     return ((mo / 12) | 0) + " y ago";
   }
+  const clampPct = (x) => Math.max(0, Math.min(100, x));
   function utilColor(u) {
-    const clampedPct = Math.max(0, Math.min(100, Math.round(u)));
+    const clampedPct = clampPct(Math.round(u));
     return clampedPct <= 50
       ? `color-mix(in srgb,var(--ok),var(--warn) ${clampedPct * 2}%)`
       : `color-mix(in srgb,var(--warn),var(--hot) ${(clampedPct - 50) * 2}%)`;
@@ -103,11 +113,13 @@
     toastEl.textContent = m;
     toastEl.classList.add("show");
     clearTimeout(toastT);
-    toastT = setTimeout(() => toastEl.classList.remove("show"), 2600);
+    toastT = setTimeout(() => toastEl.classList.remove("show"), TOAST_MS);
   }
 
   const gpus = (d) => (d && d.gpus) || [];
   const disks = (d) => (d && d.disks) || [];
+  // nvidia-smi usually reports a real GPU index; fall back to the array position when absent.
+  const gpuIndex = (gpu, i) => (gpu.index != null ? gpu.index : i);
   function diskPrimary(d) {
     const diskList = disks(d);
     return diskList.length
@@ -224,13 +236,7 @@
   /* add server / folder modal */
   function openAddModal(mode, folder) {
     _modal = { mode: mode || "server", folder: folder || (FOLDERS[0] && FOLDERS[0].key) || "lab" };
-    let element = $("lt-modal");
-    if (!element) {
-      element = document.createElement("div");
-      element.id = "lt-modal";
-      element.className = "lt-modal";
-      (document.querySelector(".lt-window") || document.body).appendChild(element);
-    }
+    _ensureModal();
     renderModal();
   }
   function closeModal() {
@@ -299,9 +305,13 @@
     // .lt-ctx is position:fixed inside the zoomed .lt-window, so map the real viewport
     // coords (x,y) into the element's zoomed local space by dividing by the zoom factor.
     const zoom = ST.zoom || 1;
-    menu.style.left = Math.max(0, Math.min(x, window.innerWidth - 198) / zoom) + "px";
+    const MENU_WIDTH = 198,
+      BOTTOM_MARGIN = 14,
+      ITEM_HEIGHT = 34; // ITEM_HEIGHT must track the .lt-ctx-i row height in style.css
+    menu.style.left = Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH) / zoom) + "px";
     menu.style.top =
-      Math.max(0, Math.min(y, window.innerHeight - 14 - items.length * 34) / zoom) + "px";
+      Math.max(0, Math.min(y, window.innerHeight - BOTTOM_MARGIN - items.length * ITEM_HEIGHT) / zoom) +
+      "px";
     menu.addEventListener("click", (ev) => {
       const target = ev.target.closest("[data-ci]");
       if (!target) return;
@@ -354,11 +364,8 @@
       items.push({
         label: "Open",
         fn: () => {
-          ST.cwd[ST.active] = full;
-          (ST.navFwd || (ST.navFwd = {}))[ST.active] = [];
-          ST.sel = null;
           ST.filter = "";
-          loadDir(ST.active, full);
+          enterDir(ST.active, full);
         },
       });
     else if (server && (server.kind === "ssh" || server.kind === "nas")) {
@@ -617,13 +624,13 @@
   }
 
   /* ---------------- hosts overview ---------------- */
-  function hostMeta(server, idx) {
+  function hostMeta(server) {
     const status = FLEET[server.id],
       gpu = gpuSummary(status),
       disk = diskPrimary(status);
     const hue = hueOf(server.id),
-      t1 = `hsl(${hue} 66% 56%)`,
-      t2 = `hsl(${(hue + 36) % 360} 60% 46%)`;
+      tint1 = `hsl(${hue} 66% 56%)`,
+      tint2 = `hsl(${(hue + 36) % 360} 60% 46%)`;
     let code;
     if (server.kind === "wsl") code = "WS";
     else if (server.kind === "nas") code = "NS";
@@ -632,37 +639,38 @@
     if (server.kind === "wsl") addr = (server.user || "wsl") + " · Ubuntu";
     else if (server.kind === "nas") addr = `${server.host}:${server.port}`;
     else addr = `${server.user}@${server.host}:${server.port}`;
-    let stat;
-    if (!status) stat = "connecting…";
-    else if (status.online === false) stat = "offline" + (status.error ? " · " + status.error : "");
+    let statusText;
+    if (!status) statusText = "connecting…";
+    else if (status.online === false)
+      statusText = "offline" + (status.error ? " · " + status.error : "");
     else if (gpu)
-      stat =
+      statusText =
         `GPU ${gpu.avg}% · ${gpu.idle > 0 ? gpu.idle + " idle" : "all busy"}` +
         (disk ? ` · disk ${pct(disk.used, disk.size)}%` : "");
     else if (server.kind === "nas")
-      stat = disk
+      statusText = disk
         ? `volume ${pct(disk.used, disk.size)}% · ${bytes(disk.size - disk.used)} free`
         : "—";
     else
-      stat =
+      statusText =
         (status.ncpu ? `load ${status.load[0]} · ${status.ncpu} cores` : "idle") +
         (disk ? ` · disk ${pct(disk.used, disk.size)}%` : "");
-    return { d: status, g: gpu, dk: disk, code, addr, stat, t1, t2 };
+    return { status, gpu, code, addr, statusText, tint1, tint2 };
   }
-  function hostCard(s, idx) {
-    const meta = hostMeta(s, idx);
+  function hostCard(s) {
+    const meta = hostMeta(s);
     let tags = `<span class="lt-htag">${esc(s.gpuLabel || s.kind)}</span>`;
-    if (meta.g && meta.g.idle > 0)
-      tags += `<span class="lt-htag free">${meta.g.idle} GPU FREE</span>`;
-    return `<div class="lt-hcard" data-sv="${s.id}"><div class="lt-hgo">Open →</div><div class="lt-htop"><span class="lt-hicon" style="--t1:${meta.t1};--t2:${meta.t2}">${esc(meta.code)}<span class="lt-st ${statusDot(meta.d)}"></span></span><div class="lt-hmeta"><div class="lt-hname">${esc(s.name)}</div><div class="lt-haddr">${esc(meta.addr)}</div></div></div><div class="lt-htags">${tags}</div><div class="lt-hstat">${esc(meta.stat)}</div></div>`;
+    if (meta.gpu && meta.gpu.idle > 0)
+      tags += `<span class="lt-htag free">${meta.gpu.idle} GPU FREE</span>`;
+    return `<div class="lt-hcard" data-sv="${s.id}"><div class="lt-hgo">Open →</div><div class="lt-htop"><span class="lt-hicon" style="--t1:${meta.tint1};--t2:${meta.tint2}">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-hmeta"><div class="lt-hname">${esc(s.name)}</div><div class="lt-haddr">${esc(meta.addr)}</div></div></div><div class="lt-htags">${tags}</div><div class="lt-hstat">${esc(meta.statusText)}</div></div>`;
   }
-  function hostRow(s, idx) {
-    const meta = hostMeta(s, idx);
+  function hostRow(s) {
+    const meta = hostMeta(s);
     const tag =
-      meta.g && meta.g.idle > 0
-        ? `<span class="lt-htag free">${meta.g.idle} FREE</span>`
+      meta.gpu && meta.gpu.idle > 0
+        ? `<span class="lt-htag free">${meta.gpu.idle} FREE</span>`
         : `<span class="lt-htag">${esc(s.gpuLabel || s.kind)}</span>`;
-    return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm" style="--t1:${meta.t1};--t2:${meta.t2}">${esc(meta.code)}<span class="lt-st ${statusDot(meta.d)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.stat)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
+    return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm" style="--t1:${meta.tint1};--t2:${meta.tint2}">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.statusText)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
   }
   function viewFleet() {
     const query = (ST.ovq || "").toLowerCase();
@@ -674,8 +682,8 @@
     let html = `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${SERVERS.length} machines · key auth</span><div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" title="Grid view">▦</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" title="List view">≡</span></div><input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
     if (!list.length) html += `<div class="lt-empty">No hosts match “${esc(ST.ovq)}”.</div>`;
     else if (mode === "list")
-      html += '<div class="lt-hlist">' + list.map((s, i) => hostRow(s, i)).join("") + "</div>";
-    else html += '<div class="lt-hgrid">' + list.map((s, i) => hostCard(s, i)).join("") + "</div>";
+      html += '<div class="lt-hlist">' + list.map((s) => hostRow(s)).join("") + "</div>";
+    else html += '<div class="lt-hgrid">' + list.map((s) => hostCard(s)).join("") + "</div>";
     const viewEl = $("lt-view");
     viewEl.className = "lt-view pad";
     viewEl.innerHTML = html;
@@ -897,6 +905,18 @@
   function joinp(dir, name) {
     return (dir === "/" || dir === "" || dir == null ? "" : dir) + "/" + name;
   }
+  // A new navigation invalidates the "→ forward" path, so reset the host's forward stack.
+  function clearForwardHistory(id) {
+    (ST.navFwd || (ST.navFwd = {}))[id] = [];
+  }
+  // Open `path` on host `id`: drop the selection + forward history, then load the listing.
+  // ST.filter is left untouched — callers navigating out of a filtered list clear it themselves.
+  function enterDir(id, path) {
+    ST.cwd[id] = path;
+    clearForwardHistory(id);
+    ST.sel = null;
+    loadDir(id, path);
+  }
   function validName(n) {
     n = (n || "").trim();
     if (!n) return "Name cannot be empty";
@@ -1025,7 +1045,7 @@
   function startXfer() {
     const state = xfer();
     if (state.timer) return;
-    state.timer = setInterval(xferTick, 1500);
+    state.timer = setInterval(xferTick, TRANSFER_POLL_MS);
     xferTick();
   }
   function toggleDrawer(open) {
@@ -1306,7 +1326,7 @@
       fontSize: 12.5,
       lineHeight: 1.15,
       cursorBlink: true,
-      scrollback: 8000,
+      scrollback: TERMINAL_SCROLLBACK,
       theme: xtermTheme(),
       allowProposedApi: true,
     });
@@ -1437,8 +1457,8 @@
     else attachSession(ST.termActive[id]);
   }
   function injectFile(session, file) {
-    if (file.size > 512 * 1024) {
-      toast("Too big to paste (>512 KB)");
+    if (file.size > MAX_PASTE_BYTES) {
+      toast(`Too big to paste (>${MAX_PASTE_BYTES / 1024} KB)`);
       return;
     }
     const reader = new FileReader();
@@ -1453,7 +1473,8 @@
     if (!session || !session.search) return;
     const query = ($("lt-find-in") || {}).value || "";
     if (!query) return;
-    dir < 0 ? session.search.findPrevious(query) : session.search.findNext(query);
+    if (dir < 0) session.search.findPrevious(query);
+    else session.search.findNext(query);
   }
   function toggleFind(show) {
     const findEl = $("lt-find");
@@ -1481,7 +1502,7 @@
 
   /* ---------------- monitor (availability · trends · processes · vitals) ---------------- */
   function tempColor(temp) {
-    return utilColor(Math.max(0, Math.min(100, (temp - 30) / 0.6)));
+    return utilColor(clampPct((temp - 30) / 0.6));
   }
   function userColor(user) {
     let hash = 0;
@@ -1496,10 +1517,10 @@
     const fleet = FLEET[id];
     if (!fleet || !fleet.gpus) return;
     fleet.gpus.forEach((gpu, i) => {
-      const key = id + ":" + (gpu.index != null ? gpu.index : i);
+      const key = id + ":" + gpuIndex(gpu, i);
       const samples = ST.hist[key] || (ST.hist[key] = []);
       samples.push({ u: gpu.util, m: pct(gpu.mu, gpu.mt) });
-      if (samples.length > 48) samples.shift();
+      if (samples.length > GPU_HISTORY_SAMPLES) samples.shift();
     });
   }
   function lineChart(series, danger, metric) {
@@ -1555,14 +1576,14 @@
       diskList = disks(fleet),
       GB = (m) => m / 1024;
     const bar = (p, c, extra) =>
-      `<span class="lt-bar"><span class="lt-fill" style="width:${Math.max(0, Math.min(100, p))}%;color:${c}"></span>${extra || ""}</span>`;
+      `<span class="lt-bar"><span class="lt-fill" style="width:${clampPct(p)}%;color:${c}"></span>${extra || ""}</span>`;
     let html = '<div class="lt-mon">';
-    /* PANEL 1 — availability strip (free VRAM is the hero) */
+    /* availability strip — free VRAM is the hero */
     if (gpuList.length) {
       const free = gpuList.filter((gpu) => gpu.util < 10 && pct(gpu.mu, gpu.mt) < 10).length;
       html += `<div class="lt-mhd"><b>GPUs</b><span class="ln"></span><span class="cnt">${free}/${gpuList.length} free</span></div><div class="lt-avail">`;
       gpuList.forEach((gpu, i) => {
-        const ix = gpu.index != null ? gpu.index : i,
+        const ix = gpuIndex(gpu, i),
           mp = pct(gpu.mu, gpu.mt),
           fGB = GB(gpu.mt - gpu.mu),
           isFree = gpu.util < 10 && mp < 10,
@@ -1573,7 +1594,7 @@
           bar(
             mp,
             mc,
-            `<span class="lt-av-mark" style="left:${Math.max(0, Math.min(100, gpu.util))}%"></span>`,
+            `<span class="lt-av-mark" style="left:${clampPct(gpu.util)}%"></span>`,
           ) +
           `<div class="lt-av-sub"><span>${GB(gpu.mu).toFixed(1)} / ${GB(gpu.mt).toFixed(0)} GB</span><span>${Math.round(gpu.pow)}/${gpu.plim} W</span></div></div>`;
       });
@@ -1581,7 +1602,7 @@
     } else if (server.kind !== "nas") {
       html += `<div class="lt-mhd"><b>GPUs</b><span class="ln"></span></div><div class="lt-note">No GPU on this host — CPU server · ${fleet.ncpu || "?"} cores · load ${fleet.load ? fleet.load[0] : "?"}</div>`;
     }
-    /* PANEL 3 — processes */
+    /* processes */
     if (server.kind !== "nas") {
       const procs = (fleet.procs || []).slice().sort((a, b) => (b.mem || 0) - (a.mem || 0));
       html += `<div class="lt-mhd"><b>Processes</b><span class="ln"></span><span class="cnt">${procs.length}</span></div><div class="lt-panel"><div class="lt-proc-h"><span>USER</span><span>PID</span><span>GPU</span><span>VRAM</span><span>TIME</span><span>COMMAND</span></div>`;
@@ -1595,7 +1616,7 @@
         html += `<div class="lt-proc-empty">No GPU processes${gpuList.length ? " — GPUs idle, or other users’ jobs not visible" : ""}.</div>`;
       html += "</div>";
     }
-    /* PANEL 4 — host vitals (bullet bars) */
+    /* host vitals (bullet bars) */
     const bl = (label, val, p, c, sub) =>
       `<div class="lt-bl"><div class="lt-bl-top"><span>${esc(label)}</span><span>${val}</span></div>${bar(p, c)}${sub ? `<div class="lt-bl-sub">${sub}</div>` : ""}</div>`;
     let vitals = "";
@@ -1633,11 +1654,11 @@
     if (server.kind === "nas") uptimeLabel = "volume";
     else if (fleet.up) uptimeLabel = "up " + fleet.up;
     html += `<div class="lt-mhd"><b>Host${server.kind === "nas" ? " · storage" : ""}</b><span class="ln"></span><span class="cnt">${uptimeLabel}</span></div><div class="lt-vitals">${vitals || '<div class="lt-proc-empty">No vitals reported.</div>'}</div>`;
-    /* PANEL — trends (history) at the bottom */
+    /* trends (history) at the bottom */
     if (gpuList.length) {
       const mk = (which) =>
         gpuList.map((gpu, i) => {
-          const ix = gpu.index != null ? gpu.index : i,
+          const ix = gpuIndex(gpu, i),
             samples = ST.hist[id + ":" + ix] || [{ u: gpu.util, m: pct(gpu.mu, gpu.mt) }];
           return {
             label: "GPU" + ix,
@@ -1651,7 +1672,7 @@
       const span = Math.max(
         1,
         ...gpuList.map((gpu, i) => {
-          const ix = gpu.index != null ? gpu.index : i;
+          const ix = gpuIndex(gpu, i);
           return (ST.hist[id + ":" + ix] || []).length;
         }),
       );
@@ -1684,7 +1705,7 @@
           if (ST.view === "server" && ST.tab === "monitor" && ST.active === cur) viewMonitor();
         })
         .catch(() => {});
-    }, 2000);
+    }, MONITOR_POLL_MS);
   }
   function renderView() {
     stopMon();
@@ -1963,11 +1984,8 @@
     }
     const go = e.target.closest("[data-go]");
     if (go) {
-      ST.cwd[ST.active] = go.getAttribute("data-go");
-      (ST.navFwd || (ST.navFwd = {}))[ST.active] = [];
-      ST.sel = null;
       ST.filter = "";
-      loadDir(ST.active, ST.cwd[ST.active]);
+      enterDir(ST.active, go.getAttribute("data-go"));
       return;
     }
     const sort = e.target.closest("[data-sort]");
@@ -1986,12 +2004,8 @@
       const name = row.getAttribute("data-name"),
         dir = row.getAttribute("data-dir") === "1";
       if (dir) {
-        const cur = ST.cwd[ST.active];
-        ST.cwd[ST.active] = joinp(cur, name);
-        (ST.navFwd || (ST.navFwd = {}))[ST.active] = [];
-        ST.sel = null;
         ST.filter = "";
-        loadDir(ST.active, ST.cwd[ST.active]);
+        enterDir(ST.active, joinp(ST.cwd[ST.active], name));
       } else {
         const entry = ((ST.listing && ST.listing.entries) || []).find((x) => x.name === name);
         ST.sel = entry
@@ -2029,11 +2043,8 @@
         loadDir(ST.active, ST.cwd[ST.active]);
         toast("Refreshing…");
       } else if (action === "open" && ST.sel) {
-        const cur = ST.cwd[ST.active];
-        ST.cwd[ST.active] = joinp(cur, ST.sel.name);
-        (ST.navFwd || (ST.navFwd = {}))[ST.active] = [];
-        ST.sel = null;
-        loadDir(ST.active, ST.cwd[ST.active]);
+        // note: unlike the other directory-enters, "Open" keeps the active filter
+        enterDir(ST.active, joinp(ST.cwd[ST.active], ST.sel.name));
       } else if (action === "newterm") {
         openServer(ST.active, "terminal");
       } else if (action === "copypath" && ST.sel) {
@@ -2306,11 +2317,8 @@
     }
     if (ST.tab === "explorer" && ST.sel && ST.sel.dir) {
       const cwd = ST.cwd[ST.active] || "/";
-      ST.cwd[ST.active] = joinp(cwd, ST.sel.name);
-      (ST.navFwd || (ST.navFwd = {}))[ST.active] = [];
-      ST.sel = null;
       ST.filter = "";
-      loadDir(ST.active, ST.cwd[ST.active]);
+      enterDir(ST.active, joinp(cwd, ST.sel.name));
     }
   }
   function vimLeft() {
@@ -2496,7 +2504,7 @@
       .catch(() => {})
       .finally(() => {
         clearTimeout(ST._pollT);
-        ST._pollT = setTimeout(pollLoop, 5000);
+        ST._pollT = setTimeout(pollLoop, FLEET_POLL_MS);
       });
   }
   async function init() {
