@@ -9,6 +9,7 @@
 <script>if(/mac/i.test(navigator.platform||navigator.userAgent||''))document.documentElement.classList.add('lt-mac');</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/devicon@2.16.0/devicon.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/regular/style.css">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
@@ -24,11 +25,11 @@
     <span class="lt-brand" data-tauri-drag-region><span class="lt-led"></span>Lab<span class="tm">Terminus</span></span>
     <span class="lt-sub" data-tauri-drag-region>yue_ziran · NLP Lab</span>
     <span class="lt-grow" data-tauri-drag-region></span>
-    <label class="lt-theme" for="lt-day"><span class="on-dark">◐ Day</span><span class="on-day">◑ Night</span></label>
+    <label class="lt-theme" for="lt-day"><span class="on-dark"><i class="ph ph-sun" aria-hidden="true"></i>Day</span><span class="on-day"><i class="ph ph-moon" aria-hidden="true"></i>Night</span></label>
     <span class="lt-wins">
-      <span class="lt-wc" data-wc="min" title="Minimize">—</span>
-      <span class="lt-wc" data-wc="max" title="Maximize">▢</span>
-      <span class="lt-wc cl" data-wc="close" title="Close">✕</span>
+      <span class="lt-wc" data-wc="min" title="Minimize" role="button" tabindex="0" aria-label="Minimize"><i class="ph ph-minus" aria-hidden="true"></i></span>
+      <span class="lt-wc" data-wc="max" title="Maximize" role="button" tabindex="0" aria-label="Maximize"><i class="ph ph-square" aria-hidden="true"></i></span>
+      <span class="lt-wc cl" data-wc="close" title="Close" role="button" tabindex="0" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></span>
     </span>
   </div>
 
@@ -44,7 +45,7 @@
   <div class="lt-status">
     <span class="lt-stat"><span class="lt-led"></span><span id="lt-conn">connecting…</span></span>
     <span class="lt-stat">live · SSH · SFTP · WSL · DSM</span>
-    <span class="lt-stat lt-xfer" id="lt-xfer-btn" title="Transfers"><span>⇅ Transfers</span><b id="lt-xfer-n" class="lt-xfer-n"></b></span>
+    <span class="lt-stat lt-xfer" id="lt-xfer-btn" title="Transfers"><span><i class="ph ph-arrows-down-up" aria-hidden="true"></i>Transfers</span><b id="lt-xfer-n" class="lt-xfer-n"></b></span>
   </div>
   <div class="lt-drawer" id="lt-drawer" hidden></div>
 </div>

@@ -15,6 +15,9 @@
     div.textContent = s == null ? "" : String(s);
     return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
+  function ph(name, extraClass) {
+    return `<i class="ph ph-${name}${extraClass ? " " + extraClass : ""}" aria-hidden="true"></i>`;
+  }
   function bytes(n) {
     if (n == null || n < 0 || isNaN(n)) return "";
     const units = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -146,13 +149,13 @@
   function tabsFor(server) {
     return server.kind === "nas"
       ? [
-          ["explorer", "Explorer", "▤"],
-          ["monitor", "Storage", "◷"],
+          ["explorer", "Explorer", "folder-open"],
+          ["monitor", "Storage", "hard-drives"],
         ]
       : [
-          ["explorer", "Explorer", "▤"],
-          ["terminal", "Terminal", "▸"],
-          ["monitor", "Monitor", "◷"],
+          ["explorer", "Explorer", "folder-open"],
+          ["terminal", "Terminal", "terminal-window"],
+          ["monitor", "Monitor", "chart-line-up"],
         ];
   }
 
@@ -178,12 +181,12 @@
       const gpu = gpuSummary(FLEET[server.id]);
       if (gpu && gpu.idle > 0) free++;
     });
-    let html = `<div class="lt-ov${ST.view === "fleet" ? " on" : ""}" data-view="fleet"><span class="gly">▦</span>Overview<span class="ct">${free ? free + " GPU FREE" : ""}</span></div>`;
-    html += `<div class="lt-side-h"><span>MACHINES</span><span class="lt-addbtn" data-add="server" title="Add a server or folder">+</span></div>`;
+    let html = `<div class="lt-ov${ST.view === "fleet" ? " on" : ""}" data-view="fleet"><span class="lt-app-icon">${ph("squares-four")}</span>Overview<span class="ct">${free ? free + " GPU FREE" : ""}</span></div>`;
+    html += `<div class="lt-side-h"><span>MACHINES</span><span class="lt-addbtn" data-add="server" role="button" tabindex="0" aria-label="Add a server or folder" title="Add a server or folder">${ph("plus")}</span></div>`;
     (FOLDERS.length ? FOLDERS : [{ key: "lab", title: "Lab Servers" }]).forEach((f) => {
       const list = SERVERS.filter((server) => (server.group || "lab") === f.key);
       const col = folderCollapsed(f.key);
-      html += `<div class="lt-sec${col ? " col" : ""}" data-grp="${esc(f.key)}"><span class="chev">▾</span><span class="lt-sec-t">${esc(f.title)}</span><span class="gn">${list.length}</span><span class="lt-sec-add" data-add="server" data-folder="${esc(f.key)}" title="Add server here">+</span></div>`;
+      html += `<div class="lt-sec${col ? " col" : ""}" data-grp="${esc(f.key)}"><span class="chev">${ph("caret-down")}</span><span class="lt-sec-t">${esc(f.title)}</span><span class="gn">${list.length}</span><span class="lt-sec-add" data-add="server" data-folder="${esc(f.key)}" role="button" tabindex="0" aria-label="Add server here" title="Add server here">${ph("plus")}</span></div>`;
       if (col) return;
       if (!list.length) {
         html += `<div class="lt-sv-empty">empty · <b data-add="server" data-folder="${esc(f.key)}">add server</b></div>`;
@@ -285,13 +288,13 @@
     menu.innerHTML = items
       .map(
         (item, i) =>
-          `<div class="lt-ctx-i${item.danger ? " danger" : ""}" data-ci="${i}">${esc(item.label)}</div>`,
+          `<div class="lt-ctx-i${item.danger ? " danger" : ""}" data-ci="${i}">${ph(contextIcon(item.label))}<span>${esc(item.label)}</span></div>`,
       )
       .join("");
     (document.querySelector(".lt-window") || document.body).appendChild(menu);
     const MENU_WIDTH = 198,
       BOTTOM_MARGIN = 14,
-      ITEM_HEIGHT = 34; // ITEM_HEIGHT must track the .lt-ctx-i row height in style.css
+      ITEM_HEIGHT = 30; // ITEM_HEIGHT must track the .lt-ctx-i row height in style.css
     menu.style.left = Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH)) + "px";
     menu.style.top =
       Math.max(0, Math.min(y, window.innerHeight - BOTTOM_MARGIN - items.length * ITEM_HEIGHT)) +
@@ -324,6 +327,22 @@
       document.addEventListener("mousedown", close, true);
       document.addEventListener("keydown", esckey, true);
     }, 0);
+  }
+  function contextIcon(label) {
+    const value = label.toLowerCase();
+    if (value.includes("delete") || value.includes("remove")) return "trash";
+    if (value.startsWith("new file")) return "file-plus";
+    if (value.startsWith("new folder")) return "folder-plus";
+    if (value.includes("add server")) return "plus-circle";
+    if (value.includes("rename") || value.includes("edit")) return "pencil-simple";
+    if (value.includes("download")) return "download-simple";
+    if (value.includes("upload")) return "upload-simple";
+    if (value.includes("send")) return "paper-plane-tilt";
+    if (value.includes("copy")) return "copy";
+    if (value.includes("terminal")) return "terminal-window";
+    if (value.includes("refresh")) return "arrow-clockwise";
+    if (value === "open") return "folder-open";
+    return "dots-three";
   }
   function ctxFileRow(e, fileRow) {
     e.preventDefault();
@@ -474,7 +493,7 @@
       ? `<b class="lt-modal-title">${mode === "folder" ? "Rename folder" : "Edit server"}</b>`
       : `<div class="lt-seg"><span class="${mode === "server" ? "on" : ""}" data-mode="server">Server</span><span class="${mode === "folder" ? "on" : ""}" data-mode="folder">Folder</span></div>`;
     const btn = editId ? "Save" : "Add " + (mode === "folder" ? "folder" : "server");
-    element.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h">${head}<span class="lt-modal-x" data-mclose="1">✕</span></div><div class="lt-modal-b">${body}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-mclose="1">Cancel</span><span class="lt-btn" data-msubmit="1">${btn}</span></div></div>`;
+    element.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h">${head}<span class="lt-modal-x" data-mclose="1" role="button" tabindex="0" aria-label="Close dialog">${ph("x")}</span></div><div class="lt-modal-b">${body}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-mclose="1">Cancel</span><span class="lt-btn" data-msubmit="1">${btn}</span></div></div>`;
     const firstInput = element.querySelector(".lt-f-in");
     if (firstInput) firstInput.focus();
   }
@@ -594,7 +613,7 @@
       chips += `<span class="lt-chip">${status.ncpu} cores · load ${status.load[0]}</span>`;
     if (disk)
       chips += `<span class="lt-chip">${server.kind === "nas" ? "volume" : "disk"} ${pct(disk.used, disk.size)}%</span>`;
-    if (status.online !== false) chips += `<span class="lt-chip ok">● live</span>`;
+    if (status.online !== false) chips += `<span class="lt-chip ok">${ph("pulse")}live</span>`;
     let addr;
     if (server.kind === "nas") addr = `${server.host}:${server.port}`;
     else if (server.kind === "wsl") addr = "wsl · Ubuntu";
@@ -602,8 +621,8 @@
     head.innerHTML = `<span class="lt-st lt-head-dot ${statusDot(status)}"></span><span class="hnm">${esc(server.name)}</span><span class="hsub">${esc(addr)}${status.up ? " · up " + status.up : ""}</span><div class="chips">${chips}</div>`;
     tabs.innerHTML = tabsFor(server)
       .map(
-        ([k, lbl, gly]) =>
-          `<div class="tab${ST.tab === k ? " on" : ""}" data-tab="${k}"><span class="gly">${gly}</span>${lbl}</div>`,
+        ([k, lbl, icon]) =>
+          `<div class="tab${ST.tab === k ? " on" : ""}" data-tab="${k}"><span class="lt-app-icon">${ph(icon)}</span>${lbl}</div>`,
       )
       .join("");
   }
@@ -661,7 +680,7 @@
         !query || (s.name + " " + s.host + " " + (s.gpuLabel || "")).toLowerCase().includes(query),
     );
     const mode = ST.ovmode === "list" ? "list" : "grid";
-    let html = `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${SERVERS.length} machines · key auth</span><div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" title="Grid view">▦</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" title="List view">≡</span></div><input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
+    let html = `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${SERVERS.length} machines · key auth</span><div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" role="button" tabindex="0" aria-label="Grid view" aria-pressed="${mode === "grid"}" title="Grid view">${ph("squares-four")}</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" role="button" tabindex="0" aria-label="List view" aria-pressed="${mode === "list"}" title="List view">${ph("list")}</span></div><input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
     if (!list.length) html += `<div class="lt-empty">No hosts match “${esc(ST.ovq)}”.</div>`;
     else if (mode === "list")
       html += '<div class="lt-hlist">' + list.map((s) => hostRow(s)).join("") + "</div>";
@@ -756,10 +775,12 @@
     return _DEVEXT[ext] || null;
   }
   function fileIcon(name, isdir, islink) {
-    if (isdir) return '<span class="lt-ic dir"></span>';
-    if (islink) return '<span class="lt-ic lnk"></span>';
+    if (isdir) return '<span class="lt-ic dir" aria-hidden="true"></span>';
+    if (islink) return '<span class="lt-ic lnk" aria-hidden="true"></span>';
     const dev = devClass(name);
-    return dev ? `<i class="lt-di devicon-${dev} colored"></i>` : '<span class="lt-ic fil"></span>';
+    return dev
+      ? `<i class="lt-di devicon-${dev} colored" aria-hidden="true"></i>`
+      : '<span class="lt-ic fil" aria-hidden="true"></span>';
   }
   async function loadDir(id, path) {
     const seq = ++ST.loadSeq;
@@ -802,14 +823,14 @@
     const fwd = (ST.navFwd && ST.navFwd[id]) || [];
     const backDim = path === "/" || !path || parent === path ? " dim" : "";
     const fwdDim = fwd.length ? "" : " dim";
-    const top = `<div class="lt-toolbar"><span class="lt-nav${backDim}" data-act="up" title="Parent folder">←</span><span class="lt-nav${fwdDim}" data-act="fwd" title="Forward — back to where you came from">→</span><span class="lt-nav" data-act="refresh" title="Refresh">↻</span>${server.kind === "ssh" ? '<span class="lt-nav" data-act="upload" title="Upload files here">⇪</span>' : ""}<div class="lt-crumb">${crumbHtml(id, path)}</div><input class="lt-filter" id="lt-filter" placeholder="filter…" value="${esc(ST.filter)}"><label class="lt-chk"><input type="checkbox" id="lt-hidden" ${ST.hidden ? "checked" : ""}>HIDDEN</label></div>`;
+    const top = `<div class="lt-toolbar"><span class="lt-nav${backDim}" data-act="up" role="button" tabindex="0" aria-label="Parent folder" title="Parent folder">${ph("arrow-up")}</span><span class="lt-nav${fwdDim}" data-act="fwd" role="button" tabindex="0" aria-label="Forward" title="Forward — back to where you came from">${ph("arrow-right")}</span><span class="lt-nav" data-act="refresh" role="button" tabindex="0" aria-label="Refresh" title="Refresh">${ph("arrow-clockwise")}</span>${server.kind === "ssh" ? `<span class="lt-nav" data-act="upload" role="button" tabindex="0" aria-label="Upload files here" title="Upload files here">${ph("upload-simple")}</span>` : ""}<div class="lt-crumb">${crumbHtml(id, path)}</div><input class="lt-filter" id="lt-filter" placeholder="filter…" value="${esc(ST.filter)}"><label class="lt-chk"><input type="checkbox" id="lt-hidden" ${ST.hidden ? "checked" : ""}>HIDDEN</label></div>`;
     let body;
     if (listing && listing.loading) {
       body = `<div class="lt-ftable"><div class="lt-empty">Listing <b>${esc(server.name)}:${esc(path)}</b> …</div></div>`;
     } else if (listing && listing.error) {
       body = `<div class="lt-ftable"><div class="lt-empty"><b>Couldn’t list this folder.</b><br>${esc(listing.error)}</div></div>`;
     } else {
-      const arrow = ST.sort.asc ? "▲" : "▼";
+      const arrow = ph(ST.sort.asc ? "caret-up" : "caret-down");
       let table = `<div class="lt-fh"><span data-sort="name">NAME ${ST.sort.key === "name" ? '<span class="ar">' + arrow + "</span>" : ""}</span><span class="lt-col-end" data-sort="size">SIZE ${ST.sort.key === "size" ? '<span class="ar">' + arrow + "</span>" : ""}</span><span class="lt-col-end" data-sort="mtime">MODIFIED ${ST.sort.key === "mtime" ? '<span class="ar">' + arrow + "</span>" : ""}</span></div>`;
       let items = ((listing && listing.entries) || []).slice();
       if (!ST.hidden)
@@ -856,37 +877,19 @@
   function prevHtml(id) {
     const server = byId[id];
     if (!ST.sel)
-      return `<aside class="lt-prev"><div class="pic">▣</div><h4>Nothing selected</h4><div class="meta">Click a file to preview.<br>Click a folder to open it.</div><div class="lt-hint">Live listing over ${listingSource(server.kind)}.</div></aside>`;
+      return `<aside class="lt-prev"><div class="pic">${ph("files")}</div><h4>Nothing selected</h4><div class="meta">Click a file to preview.<br>Click a folder to open it.</div><div class="lt-hint">Live listing over ${listingSource(server.kind)}.</div></aside>`;
     const entry = ST.sel;
     if (entry.dir)
-      return `<aside class="lt-prev"><div class="pic">▤</div><h4>${esc(entry.name)}</h4><div class="meta">Folder · ${esc(server.name)}<br>${esc(ST.cwd[id])}/</div><span class="lt-act pri" data-act="open">Open</span><span class="lt-act" data-act="copypath">Copy path</span>${server.kind !== "nas" ? '<span class="lt-act" data-act="newterm">Open terminal here</span>' : ""}</aside>`;
+      return `<aside class="lt-prev"><div class="pic">${ph("folder-open")}</div><h4>${esc(entry.name)}</h4><div class="meta">Folder · ${esc(server.name)}<br>${esc(ST.cwd[id])}/</div><span class="lt-act pri" data-act="open">Open</span><span class="lt-act" data-act="copypath">Copy path</span>${server.kind !== "nas" ? '<span class="lt-act" data-act="newterm">Open terminal here</span>' : ""}</aside>`;
     const ext = (entry.name.split(".").pop() || "").toLowerCase();
-    const icon =
-      {
-        pt: "◆",
-        pth: "◆",
-        ckpt: "◆",
-        yaml: "⚙",
-        yml: "⚙",
-        json: "⚙",
-        log: "▦",
-        jsonl: "▦",
-        sh: "▶",
-        csh: "▶",
-        py: "⌘",
-        bib: "❡",
-        pdf: "▤",
-        php: "⟨⟩",
-        dat: "▦",
-      }[ext] || "▢";
-    return `<aside class="lt-prev"><div class="pic">${icon}</div><h4>${esc(entry.name)}</h4><div class="meta">${bytes(entry.size)} · ${esc(ext || "file")}<br>${entry.mtime ? "modified " + ago(entry.mtime) : ""}<br>${esc(server.name)}:${esc(ST.cwd[id])}/</div><span class="lt-act pri" data-act="sendto">Send to…</span><span class="lt-act" data-act="download">Download</span><span class="lt-act" data-act="copypath">Copy path</span></aside>`;
+    return `<aside class="lt-prev"><div class="pic">${ph("file")}</div><h4>${esc(entry.name)}</h4><div class="meta">${bytes(entry.size)} · ${esc(ext || "file")}<br>${entry.mtime ? "modified " + ago(entry.mtime) : ""}<br>${esc(server.name)}:${esc(ST.cwd[id])}/</div><span class="lt-act pri" data-act="sendto">Send to…</span><span class="lt-act" data-act="download">Download</span><span class="lt-act" data-act="copypath">Copy path</span></aside>`;
   }
 
   /* ---------------- explorer file CRUD (context menu + dialogs) ---------------- */
   function joinp(dir, name) {
     return (dir === "/" || dir === "" || dir == null ? "" : dir) + "/" + name;
   }
-  // A new navigation invalidates the "→ forward" path, so reset the host's forward stack.
+  // A new navigation invalidates the forward path, so reset the host's forward stack.
   function clearForwardHistory(id) {
     (ST.navFwd || (ST.navFwd = {}))[id] = [];
   }
@@ -948,7 +951,7 @@
   }
   function promptM(title, initial, cb) {
     const modal = _dlg(
-      `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">${esc(title)}</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b"><input class="lt-f-in" id="lt-prompt-in" value="${esc(initial || "")}" spellcheck="false"></div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1">OK</span></div></div>`,
+      `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">${esc(title)}</b><span class="lt-modal-x" data-pclose="1" role="button" tabindex="0" aria-label="Close dialog">${ph("x")}</span></div><div class="lt-modal-b"><input class="lt-f-in" id="lt-prompt-in" value="${esc(initial || "")}" spellcheck="false"></div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1">OK</span></div></div>`,
     );
     const inp = $("lt-prompt-in");
     inp.focus();
@@ -974,7 +977,7 @@
   }
   function confirmM(html, cb) {
     const modal = _dlg(
-      `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">Are you sure?</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b lt-modal-copy">${html}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn destructive" data-pok="1">Delete</span></div></div>`,
+      `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">Are you sure?</b><span class="lt-modal-x" data-pclose="1" role="button" tabindex="0" aria-label="Close dialog">${ph("x")}</span></div><div class="lt-modal-b lt-modal-copy">${html}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn destructive" data-pok="1">Delete</span></div></div>`,
     );
     const close = () => {
       modal.remove();
@@ -1035,10 +1038,10 @@
     if (state.open) startXfer();
     renderDrawer();
   }
-  function xferDirGlyph(kind) {
-    if (kind === "upload") return "↑";
-    if (kind === "download") return "↓";
-    return "→";
+  function xferDirIcon(kind) {
+    if (kind === "upload") return ph("arrow-up");
+    if (kind === "download") return ph("arrow-down");
+    return ph("arrow-right");
   }
   function xferStateTone(state) {
     if (state === "error") return "destructive";
@@ -1070,14 +1073,14 @@
         .reverse()
         .map((job) => {
           const percent = xferPct(job);
-          const dirGlyph = xferDirGlyph(job.kind);
+          const dirIcon = xferDirIcon(job.kind);
           const stateTone = xferStateTone(job.state);
           const isActive = job.state === "active" || job.state === "queued";
-          return `<div class="lt-xrow"><div class="lt-xtop"><span class="lt-xlabel" title="${esc(job.label)}">${dirGlyph} ${esc(job.label)}</span>${isActive ? `<span class="lt-xcancel" data-xcancel="${job.id}" title="Cancel">✕</span>` : `<span class="lt-xstate lt-tone-${stateTone}">${job.state}</span>`}</div><div class="lt-xbar"><span class="lt-xfill lt-tone-${stateTone}" style="width:${percent}%"></span></div><div class="lt-xsub"><span>${job.total ? bytes(job.done) + " / " + bytes(job.total) : bytes(job.done)}</span><span>${xferProgressLabel(job, percent)}</span></div></div>`;
+          return `<div class="lt-xrow"><div class="lt-xtop"><span class="lt-xlabel" title="${esc(job.label)}">${dirIcon} ${esc(job.label)}</span>${isActive ? `<span class="lt-xcancel" data-xcancel="${job.id}" role="button" tabindex="0" aria-label="Cancel transfer" title="Cancel">${ph("x")}</span>` : `<span class="lt-xstate lt-tone-${stateTone}">${job.state}</span>`}</div><div class="lt-xbar"><span class="lt-xfill lt-tone-${stateTone}" style="width:${percent}%"></span></div><div class="lt-xsub"><span>${job.total ? bytes(job.done) + " / " + bytes(job.total) : bytes(job.done)}</span><span>${xferProgressLabel(job, percent)}</span></div></div>`;
         })
         .join("") ||
       '<div class="lt-xempty">No transfers yet.<br>Use “Send to…”, “Download”, or “Upload”.</div>';
-    drawerEl.innerHTML = `<div class="lt-xhead"><b>Transfers</b><span class="lt-grow"></span><span class="lt-xbtn" data-xfer="clear">Clear done</span><span class="lt-xbtn" data-xclose="1">✕</span></div><div class="lt-xbody">${rows}</div>`;
+    drawerEl.innerHTML = `<div class="lt-xhead"><b>Transfers</b><span class="lt-grow"></span><span class="lt-xbtn" data-xfer="clear">Clear done</span><span class="lt-xbtn lt-icon-control" data-xclose="1" role="button" tabindex="0" aria-label="Close transfers">${ph("x")}</span></div><div class="lt-xbody">${rows}</div>`;
   }
   function doDownload(id, path) {
     const a = document.createElement("a");
@@ -1104,7 +1107,7 @@
       )
       .join("");
     const defaultDest = destinations[0];
-    modalEl.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">Send “${esc(src.name)}”</b><span class="lt-modal-x" data-sclose="1">✕</span></div><div class="lt-modal-b"><div class="lt-f-grid"><div class="lt-f-wide"><label class="lt-f-l">Destination host</label><select class="lt-f-in" id="st-host">${options}</select></div><div class="lt-f-wide"><label class="lt-f-l">Destination folder</label><input class="lt-f-in" id="st-path" value="${esc((defaultDest && defaultDest.home) || "/")}" placeholder="/home/you"></div></div><div class="lt-hint">Copies over the lab network (server→server or →NAS), streamed with live progress in Transfers.</div></div><div class="lt-modal-f"><span class="lt-btn ghost" data-sclose="1">Cancel</span><span class="lt-btn" data-ssubmit="1">Send</span></div></div>`;
+    modalEl.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">Send “${esc(src.name)}”</b><span class="lt-modal-x" data-sclose="1" role="button" tabindex="0" aria-label="Close dialog">${ph("x")}</span></div><div class="lt-modal-b"><div class="lt-f-grid"><div class="lt-f-wide"><label class="lt-f-l">Destination host</label><select class="lt-f-in" id="st-host">${options}</select></div><div class="lt-f-wide"><label class="lt-f-l">Destination folder</label><input class="lt-f-in" id="st-path" value="${esc((defaultDest && defaultDest.home) || "/")}" placeholder="/home/you"></div></div><div class="lt-hint">Copies over the lab network (server→server or →NAS), streamed with live progress in Transfers.</div></div><div class="lt-modal-f"><span class="lt-btn ghost" data-sclose="1">Cancel</span><span class="lt-btn" data-ssubmit="1">Send</span></div></div>`;
     const hostSelect = $("st-host");
     if (hostSelect)
       hostSelect.onchange = () => {
@@ -1289,9 +1292,9 @@
     let html = "";
     tabs.forEach((k, i) => {
       const on = k === activeKey(id);
-      html += `<span class="lt-ttab${on ? " on" : ""}" data-sess="${k}">sh${i + 1}${tabs.length > 1 ? ` <b data-close="${k}">✕</b>` : ""}</span>`;
+      html += `<span class="lt-ttab${on ? " on" : ""}" data-sess="${k}">sh${i + 1}${tabs.length > 1 ? ` <b data-close="${k}" role="button" tabindex="0" aria-label="Close shell ${i + 1}">${ph("x")}</b>` : ""}</span>`;
     });
-    html += `<span class="lt-ttab add" data-newsess="1" title="New shell on this host">+</span>`;
+    html += `<span class="lt-ttab add" data-newsess="1" role="button" tabindex="0" aria-label="New shell on this host" title="New shell on this host">${ph("plus")}</span>`;
     element.innerHTML = html;
   }
   function attachSession(key) {
@@ -1313,7 +1316,7 @@
   function createTerm() {
     const term = new Terminal({
       fontFamily:
-        "'Symbols Nerd Font Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
+        "'Symbols Nerd Font Mono','JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
       fontSize: 12.5,
       lineHeight: 1.15,
       cursorBlink: true,
@@ -1485,7 +1488,7 @@
       server = byId[id];
     const view = $("lt-view");
     view.className = "lt-view flexcol";
-    view.innerHTML = `<div class="lt-term${ST.broadcast ? " bcast" : ""}"><div class="lt-term-bar"><span class="lt-led off" id="lt-term-led"></span><span>${server.kind === "wsl" ? "wsl.exe" : "ssh"} · ${esc(server.host)}${server.kind === "ssh" ? ":" + server.port : ""}</span><span id="lt-term-stat-c">…</span><span class="lt-ttabs" id="lt-ttabs"></span><span class="lt-grow"></span><span class="lt-tbtn${ST.broadcast ? " on" : ""}" data-tact="broadcast" title="Mirror keystrokes to every open session">⇉ Broadcast</span><span class="lt-tbtn" data-tact="find" title="Search scrollback (Ctrl+F)">Find</span><span class="lt-tbtn" data-tact="clear">Clear</span><span class="lt-tbtn" data-tact="reconnect">Reconnect</span></div><div class="lt-find" id="lt-find" hidden><input id="lt-find-in" placeholder="search scrollback — Enter / Shift+Enter" autocomplete="off"><span class="lt-tbtn" data-tact="find-prev">▴</span><span class="lt-tbtn" data-tact="find-next">▾</span><span class="lt-tbtn" data-tact="find-close">✕</span></div><div class="lt-term-mount" id="lt-term-mount"></div></div>`;
+    view.innerHTML = `<div class="lt-term${ST.broadcast ? " bcast" : ""}"><div class="lt-term-bar"><span class="lt-led off" id="lt-term-led"></span><span>${server.kind === "wsl" ? "wsl.exe" : "ssh"} · ${esc(server.host)}${server.kind === "ssh" ? ":" + server.port : ""}</span><span id="lt-term-stat-c">…</span><span class="lt-ttabs" id="lt-ttabs"></span><span class="lt-grow"></span><span class="lt-tbtn${ST.broadcast ? " on" : ""}" data-tact="broadcast" title="Mirror keystrokes to every open session">${ph("broadcast")}Broadcast</span><span class="lt-tbtn" data-tact="find" title="Search scrollback (Ctrl+F)">${ph("magnifying-glass")}Find</span><span class="lt-tbtn" data-tact="clear">${ph("eraser")}Clear</span><span class="lt-tbtn" data-tact="reconnect">${ph("arrow-clockwise")}Reconnect</span></div><div class="lt-find" id="lt-find" hidden><input id="lt-find-in" placeholder="search scrollback — Enter / Shift+Enter" autocomplete="off"><span class="lt-tbtn lt-icon-control" data-tact="find-prev" role="button" tabindex="0" aria-label="Previous match">${ph("caret-up")}</span><span class="lt-tbtn lt-icon-control" data-tact="find-next" role="button" tabindex="0" aria-label="Next match">${ph("caret-down")}</span><span class="lt-tbtn lt-icon-control" data-tact="find-close" role="button" tabindex="0" aria-label="Close search">${ph("x")}</span></div><div class="lt-term-mount" id="lt-term-mount"></div></div>`;
     const key = activeKey(id);
     if (key && SESS[key]) attachSession(key);
     else openSession(id);
@@ -2057,6 +2060,15 @@
     }
   });
   document.addEventListener("keydown", (e) => {
+    if (
+      (e.key === "Enter" || e.key === " ") &&
+      e.target.matches &&
+      e.target.matches('[role="button"][tabindex="0"]')
+    ) {
+      e.preventDefault();
+      e.target.click();
+      return;
+    }
     if ($("lt-modal")) {
       if (e.key === "Escape") {
         closeModal();
