@@ -238,7 +238,10 @@ fn parse_ps_map(lines: &[String]) -> HashMap<i64, (String, String, String)> {
             .parse::<i64>()
             .map(fmt_dur)
             .unwrap_or_else(|_| etime.to_string());
-        pid_info.insert(pid, (user.to_string(), etime, rest.trim_start().to_string()));
+        pid_info.insert(
+            pid,
+            (user.to_string(), etime, rest.trim_start().to_string()),
+        );
     }
     pid_info
 }
@@ -252,7 +255,11 @@ fn parse_apps(lines: &[String]) -> Vec<(i64, String, i64)> {
             continue;
         }
         if let Ok(pid) = columns[0].parse::<i64>() {
-            apps.push((pid, columns[1].clone(), parse_f64_or_zero(&columns[2]) as i64));
+            apps.push((
+                pid,
+                columns[1].clone(),
+                parse_f64_or_zero(&columns[2]) as i64,
+            ));
         }
     }
     apps

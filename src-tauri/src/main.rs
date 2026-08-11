@@ -78,7 +78,11 @@ fn download_file_name(url: &str) -> String {
         return "download".into();
     };
     let path = percent_decode(query.split('&').next().unwrap_or(query));
-    let name = path.trim_end_matches('/').rsplit('/').next().unwrap_or("download");
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("download");
     if name.is_empty() {
         return "download".into();
     }
@@ -110,8 +114,13 @@ fn download_destination(app: &tauri::AppHandle, url: &str) -> std::path::PathBuf
 /// Build the system tray (close-to-tray lives here): menu + icon + event handlers.
 fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Show Lab Terminus", true, None::<&str>)?;
-    let opencfg =
-        MenuItem::with_id(app, "opencfg", "Open config file location", true, None::<&str>)?;
+    let opencfg = MenuItem::with_id(
+        app,
+        "opencfg",
+        "Open config file location",
+        true,
+        None::<&str>,
+    )?;
     let reload = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Lab Terminus", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
@@ -162,14 +171,14 @@ fn main() {
             config::start_watcher();
 
             // bind a loopback port up front so we can point the window at it
-            let std_listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("failed to bind loopback port");
+            let std_listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind loopback port");
             std_listener.set_nonblocking(true).ok();
             let port = std_listener.local_addr().expect("local_addr").port();
 
             tauri::async_runtime::spawn(async move {
-                let listener = tokio::net::TcpListener::from_std(std_listener)
-                    .expect("tokio listener");
+                let listener =
+                    tokio::net::TcpListener::from_std(std_listener).expect("tokio listener");
                 if let Err(e) = axum::serve(listener, server::router()).await {
                     eprintln!("[server] {e}");
                 }
