@@ -45,11 +45,15 @@
     return ((mo / 12) | 0) + " y ago";
   }
   const clampPct = (x) => Math.max(0, Math.min(100, x));
-  function utilColor(u) {
-    const clampedPct = clampPct(Math.round(u));
-    return clampedPct <= 50
-      ? `color-mix(in srgb,var(--ok),var(--warn) ${clampedPct * 2}%)`
-      : `color-mix(in srgb,var(--warn),var(--hot) ${(clampedPct - 50) * 2}%)`;
+  function utilizationTone(value) {
+    const percent = clampPct(Math.round(value));
+    if (percent < 50) return "online";
+    if (percent < 70) return "busy";
+    if (percent < 85) return "warning";
+    return "destructive";
+  }
+  function chartTone(index) {
+    return "lt-chart-tone-" + ((Math.abs(Number(index) || 0) % 5) + 1);
   }
   function parentOf(p) {
     if (!p || p === "/") return "/";
@@ -72,7 +76,6 @@
   let SERVERS = [],
     byId = {},
     FOLDERS = [],
-    SIDX = {},
     _modal = { mode: "server", folder: null },
     _sendto = null;
   const FLEET = {};
@@ -136,7 +139,8 @@
     const summary = gpuSummary(d);
     if (!summary) return "ok";
     if (summary.idle === summary.total) return "ok";
-    if (summary.avg >= 70) return "hot";
+    if (summary.avg >= 85) return "hot";
+    if (summary.avg >= 70) return "warning";
     return "busy";
   }
   function tabsFor(server) {
@@ -153,13 +157,6 @@
   }
 
   /* ---------------- sidebar + registry (folders, add/remove) ---------------- */
-  function hueOf(id) {
-    return ((SIDX[id] || 0) * 47) % 360;
-  }
-  function svTile(id) {
-    const hue = hueOf(id);
-    return `--t1:hsl(${hue} 62% 55%);--t2:hsl(${(hue + 34) % 360} 56% 45%)`;
-  }
   function svCode(server) {
     if (server.kind === "wsl") return "WS";
     if (server.kind === "nas") return "NS";
@@ -199,10 +196,10 @@
         let right = "";
         if (gpu && gpu.idle === gpu.total) right = '<span class="lt-sv-free">FREE</span>';
         else if (gpu)
-          right = `<span class="lt-sv-pct" style="color:${utilColor(gpu.avg)}">${gpu.avg}%</span>`;
+          right = `<span class="lt-sv-pct lt-tone-${utilizationTone(gpu.avg)}">${gpu.avg}%</span>`;
         else if (disk && server.kind === "nas")
           right = `<span class="lt-sv-pct">${pct(disk.used, disk.size)}%</span>`;
-        html += `<div class="lt-sv${ST.view === "server" && server.id === ST.active ? " on" : ""}" data-sv="${server.id}"><span class="lt-svi" style="${svTile(server.id)}">${esc(svCode(server))}<span class="lt-st ${statusDot(status)}"></span></span><span class="lt-svt"><span class="lt-sv-name">${esc(server.name)}</span><span class="lt-sv-sub">${esc(svSub(server))}</span></span>${right}</div>`;
+        html += `<div class="lt-sv${ST.view === "server" && server.id === ST.active ? " on" : ""}" data-sv="${server.id}"><span class="lt-svi">${esc(svCode(server))}<span class="lt-st ${statusDot(status)}"></span></span><span class="lt-svt"><span class="lt-sv-name">${esc(server.name)}</span><span class="lt-sv-sub">${esc(svSub(server))}</span></span>${right}</div>`;
       });
     });
     $("lt-side").innerHTML = html;
@@ -213,7 +210,6 @@
       SERVERS = servers;
       FOLDERS = folders;
       byId = Object.fromEntries(SERVERS.map((server) => [server.id, server]));
-      SIDX = Object.fromEntries(SERVERS.map((server, i) => [server.id, i]));
       if (ST.active && !byId[ST.active]) {
         ST.view = "fleet";
         ST.active = SERVERS[0] && SERVERS[0].id;
@@ -379,7 +375,7 @@
       danger: true,
       fn: () =>
         confirmM(
-          `Delete ${dir ? "folder" : "file"} <b style="color:var(--tx)">${esc(name)}</b>${dir ? " <u>and everything inside it</u>" : ""}?<br>This cannot be undone.`,
+          `Delete ${dir ? "folder" : "file"} <b class="lt-confirm-name">${esc(name)}</b>${dir ? " <u>and everything inside it</u>" : ""}?<br>This cannot be undone.`,
           () => fsOp("delete", full),
         ),
     });
@@ -475,7 +471,7 @@
       body = `<div class="lt-f-grid"><div><label class="lt-f-l">Kind</label><select class="lt-f-in" id="m-kind"><option value="ssh" ${kindSelected("ssh")}>SSH server</option><option value="wsl" ${kindSelected("wsl")}>WSL</option><option value="nas" ${kindSelected("nas")}>Synology NAS</option></select></div><div><label class="lt-f-l">Name</label><input class="lt-f-in" id="m-name" placeholder="Exp19" value="${esc(server.name || "")}"></div><div><label class="lt-f-l">Host / IP</label><input class="lt-f-in" id="m-host" placeholder="133.9.48.110" value="${esc(server.host || "")}"></div><div><label class="lt-f-l">Port</label><input class="lt-f-in" id="m-port" placeholder="22" value="${esc(server.port != null ? server.port : "")}"></div><div><label class="lt-f-l">User</label><input class="lt-f-in" id="m-user" placeholder="yue_ziran" value="${esc(server.user || "")}"></div><div><label class="lt-f-l">Label (GPU / role)</label><input class="lt-f-in" id="m-gpu" placeholder="RTX 4090" value="${esc(server.gpuLabel || "")}"></div><div class="lt-f-wide"><label class="lt-f-l">Folder</label><select class="lt-f-in" id="m-folder">${folderOptions}</select></div></div>`;
     }
     const head = editId
-      ? `<b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">${mode === "folder" ? "Rename folder" : "Edit server"}</b>`
+      ? `<b class="lt-modal-title">${mode === "folder" ? "Rename folder" : "Edit server"}</b>`
       : `<div class="lt-seg"><span class="${mode === "server" ? "on" : ""}" data-mode="server">Server</span><span class="${mode === "folder" ? "on" : ""}" data-mode="folder">Folder</span></div>`;
     const btn = editId ? "Save" : "Add " + (mode === "folder" ? "folder" : "server");
     element.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h">${head}<span class="lt-modal-x" data-mclose="1">✕</span></div><div class="lt-modal-b">${body}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-mclose="1">Cancel</span><span class="lt-btn" data-msubmit="1">${btn}</span></div></div>`;
@@ -582,12 +578,13 @@
       gpu = gpuSummary(status),
       disk = diskPrimary(status);
     let chips = "";
-    if (status.online === false) chips += `<span class="lt-chip hot">offline</span>`;
+    if (status.online === false) chips += `<span class="lt-chip destructive">offline</span>`;
     else if (gpu) {
       let chipKind;
-      if (gpu.avg >= 70) chipKind = "hot";
+      if (gpu.avg >= 85) chipKind = "destructive";
+      else if (gpu.avg >= 70) chipKind = "warning";
       else if (gpu.idle === gpu.total) chipKind = "ok";
-      else chipKind = "";
+      else chipKind = "busy";
       chips += `<span class="lt-chip ${chipKind}">${gpu.total > 1 ? gpu.total + "× GPU" : "GPU"} · ${gpus(
         status,
       )
@@ -602,7 +599,7 @@
     if (server.kind === "nas") addr = `${server.host}:${server.port}`;
     else if (server.kind === "wsl") addr = "wsl · Ubuntu";
     else addr = `${server.user}@${server.host}:${server.port}`;
-    head.innerHTML = `<span class="lt-st ${statusDot(status)}" style="width:10px;height:10px"></span><span class="hnm">${esc(server.name)}</span><span class="hsub">${esc(addr)}${status.up ? " · up " + status.up : ""}</span><div class="chips">${chips}</div>`;
+    head.innerHTML = `<span class="lt-st lt-head-dot ${statusDot(status)}"></span><span class="hnm">${esc(server.name)}</span><span class="hsub">${esc(addr)}${status.up ? " · up " + status.up : ""}</span><div class="chips">${chips}</div>`;
     tabs.innerHTML = tabsFor(server)
       .map(
         ([k, lbl, gly]) =>
@@ -616,9 +613,6 @@
     const status = FLEET[server.id],
       gpu = gpuSummary(status),
       disk = diskPrimary(status);
-    const hue = hueOf(server.id),
-      tint1 = `hsl(${hue} 66% 56%)`,
-      tint2 = `hsl(${(hue + 36) % 360} 60% 46%)`;
     let code;
     if (server.kind === "wsl") code = "WS";
     else if (server.kind === "nas") code = "NS";
@@ -643,14 +637,14 @@
       statusText =
         (status.ncpu ? `load ${status.load[0]} · ${status.ncpu} cores` : "idle") +
         (disk ? ` · disk ${pct(disk.used, disk.size)}%` : "");
-    return { status, gpu, code, addr, statusText, tint1, tint2 };
+    return { status, gpu, code, addr, statusText };
   }
   function hostCard(s) {
     const meta = hostMeta(s);
     let tags = `<span class="lt-htag">${esc(s.gpuLabel || s.kind)}</span>`;
     if (meta.gpu && meta.gpu.idle > 0)
       tags += `<span class="lt-htag free">${meta.gpu.idle} GPU FREE</span>`;
-    return `<div class="lt-hcard" data-sv="${s.id}"><div class="lt-hgo">Open →</div><div class="lt-htop"><span class="lt-hicon" style="--t1:${meta.tint1};--t2:${meta.tint2}">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-hmeta"><div class="lt-hname">${esc(s.name)}</div><div class="lt-haddr">${esc(meta.addr)}</div></div></div><div class="lt-htags">${tags}</div><div class="lt-hstat">${esc(meta.statusText)}</div></div>`;
+    return `<div class="lt-hcard" data-sv="${s.id}"><div class="lt-hgo">Open →</div><div class="lt-htop"><span class="lt-hicon">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-hmeta"><div class="lt-hname">${esc(s.name)}</div><div class="lt-haddr">${esc(meta.addr)}</div></div></div><div class="lt-htags">${tags}</div><div class="lt-hstat">${esc(meta.statusText)}</div></div>`;
   }
   function hostRow(s) {
     const meta = hostMeta(s);
@@ -658,7 +652,7 @@
       meta.gpu && meta.gpu.idle > 0
         ? `<span class="lt-htag free">${meta.gpu.idle} FREE</span>`
         : `<span class="lt-htag">${esc(s.gpuLabel || s.kind)}</span>`;
-    return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm" style="--t1:${meta.tint1};--t2:${meta.tint2}">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.statusText)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
+    return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.statusText)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
   }
   function viewFleet() {
     const query = (ST.ovq || "").toLowerCase();
@@ -816,7 +810,7 @@
       body = `<div class="lt-ftable"><div class="lt-empty"><b>Couldn’t list this folder.</b><br>${esc(listing.error)}</div></div>`;
     } else {
       const arrow = ST.sort.asc ? "▲" : "▼";
-      let table = `<div class="lt-fh"><span data-sort="name">NAME ${ST.sort.key === "name" ? '<span class="ar">' + arrow + "</span>" : ""}</span><span data-sort="size" style="text-align:right">SIZE ${ST.sort.key === "size" ? '<span class="ar">' + arrow + "</span>" : ""}</span><span data-sort="mtime" style="text-align:right">MODIFIED ${ST.sort.key === "mtime" ? '<span class="ar">' + arrow + "</span>" : ""}</span></div>`;
+      let table = `<div class="lt-fh"><span data-sort="name">NAME ${ST.sort.key === "name" ? '<span class="ar">' + arrow + "</span>" : ""}</span><span class="lt-col-end" data-sort="size">SIZE ${ST.sort.key === "size" ? '<span class="ar">' + arrow + "</span>" : ""}</span><span class="lt-col-end" data-sort="mtime">MODIFIED ${ST.sort.key === "mtime" ? '<span class="ar">' + arrow + "</span>" : ""}</span></div>`;
       let items = ((listing && listing.entries) || []).slice();
       if (!ST.hidden)
         items = items.filter((entry) => !entry.name.startsWith(".") && entry.name !== "#recycle");
@@ -954,7 +948,7 @@
   }
   function promptM(title, initial, cb) {
     const modal = _dlg(
-      `<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">${esc(title)}</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b"><input class="lt-f-in" id="lt-prompt-in" value="${esc(initial || "")}" spellcheck="false"></div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1">OK</span></div></div>`,
+      `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">${esc(title)}</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b"><input class="lt-f-in" id="lt-prompt-in" value="${esc(initial || "")}" spellcheck="false"></div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1">OK</span></div></div>`,
     );
     const inp = $("lt-prompt-in");
     inp.focus();
@@ -980,7 +974,7 @@
   }
   function confirmM(html, cb) {
     const modal = _dlg(
-      `<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">Are you sure?</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b" style="font-size:12.5px;color:var(--tx2);line-height:1.65">${html}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn" data-pok="1" style="background:var(--err);border-color:var(--err)">Delete</span></div></div>`,
+      `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">Are you sure?</b><span class="lt-modal-x" data-pclose="1">✕</span></div><div class="lt-modal-b lt-modal-copy">${html}</div><div class="lt-modal-f"><span class="lt-btn ghost" data-pclose="1">Cancel</span><span class="lt-btn destructive" data-pok="1">Delete</span></div></div>`,
     );
     const close = () => {
       modal.remove();
@@ -1046,11 +1040,11 @@
     if (kind === "download") return "↓";
     return "→";
   }
-  function xferStateColor(state) {
-    if (state === "error") return "var(--hot)";
-    if (state === "done") return "var(--ok)";
-    if (state === "canceled") return "var(--dim)";
-    return "var(--acc)";
+  function xferStateTone(state) {
+    if (state === "error") return "destructive";
+    if (state === "done") return "online";
+    if (state === "canceled") return "muted";
+    return "primary";
   }
   function xferPct(j) {
     if (j.total) return Math.min(100, Math.round((j.done / j.total) * 100));
@@ -1077,9 +1071,9 @@
         .map((job) => {
           const percent = xferPct(job);
           const dirGlyph = xferDirGlyph(job.kind);
-          const stateColor = xferStateColor(job.state);
+          const stateTone = xferStateTone(job.state);
           const isActive = job.state === "active" || job.state === "queued";
-          return `<div class="lt-xrow"><div class="lt-xtop"><span class="lt-xlabel" title="${esc(job.label)}">${dirGlyph} ${esc(job.label)}</span>${isActive ? `<span class="lt-xcancel" data-xcancel="${job.id}" title="Cancel">✕</span>` : `<span class="lt-xstate" style="color:${stateColor}">${job.state}</span>`}</div><div class="lt-xbar"><span class="lt-xfill" style="width:${percent}%;background:${stateColor}"></span></div><div class="lt-xsub"><span>${job.total ? bytes(job.done) + " / " + bytes(job.total) : bytes(job.done)}</span><span>${xferProgressLabel(job, percent)}</span></div></div>`;
+          return `<div class="lt-xrow"><div class="lt-xtop"><span class="lt-xlabel" title="${esc(job.label)}">${dirGlyph} ${esc(job.label)}</span>${isActive ? `<span class="lt-xcancel" data-xcancel="${job.id}" title="Cancel">✕</span>` : `<span class="lt-xstate lt-tone-${stateTone}">${job.state}</span>`}</div><div class="lt-xbar"><span class="lt-xfill lt-tone-${stateTone}" style="width:${percent}%"></span></div><div class="lt-xsub"><span>${job.total ? bytes(job.done) + " / " + bytes(job.total) : bytes(job.done)}</span><span>${xferProgressLabel(job, percent)}</span></div></div>`;
         })
         .join("") ||
       '<div class="lt-xempty">No transfers yet.<br>Use “Send to…”, “Download”, or “Upload”.</div>';
@@ -1110,7 +1104,7 @@
       )
       .join("");
     const defaultDest = destinations[0];
-    modalEl.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">Send “${esc(src.name)}”</b><span class="lt-modal-x" data-sclose="1">✕</span></div><div class="lt-modal-b"><div class="lt-f-grid"><div class="lt-f-wide"><label class="lt-f-l">Destination host</label><select class="lt-f-in" id="st-host">${options}</select></div><div class="lt-f-wide"><label class="lt-f-l">Destination folder</label><input class="lt-f-in" id="st-path" value="${esc((defaultDest && defaultDest.home) || "/")}" placeholder="/home/you"></div></div><div class="lt-hint">Copies over the lab network (server→server or →NAS), streamed with live progress in Transfers.</div></div><div class="lt-modal-f"><span class="lt-btn ghost" data-sclose="1">Cancel</span><span class="lt-btn" data-ssubmit="1">Send</span></div></div>`;
+    modalEl.innerHTML = `<div class="lt-modal-card"><div class="lt-modal-h"><b class="lt-modal-title">Send “${esc(src.name)}”</b><span class="lt-modal-x" data-sclose="1">✕</span></div><div class="lt-modal-b"><div class="lt-f-grid"><div class="lt-f-wide"><label class="lt-f-l">Destination host</label><select class="lt-f-in" id="st-host">${options}</select></div><div class="lt-f-wide"><label class="lt-f-l">Destination folder</label><input class="lt-f-in" id="st-path" value="${esc((defaultDest && defaultDest.home) || "/")}" placeholder="/home/you"></div></div><div class="lt-hint">Copies over the lab network (server→server or →NAS), streamed with live progress in Transfers.</div></div><div class="lt-modal-f"><span class="lt-btn ghost" data-sclose="1">Cancel</span><span class="lt-btn" data-ssubmit="1">Send</span></div></div>`;
     const hostSelect = $("st-host");
     if (hostSelect)
       hostSelect.onchange = () => {
@@ -1206,44 +1200,54 @@
   /* ---------------- terminal (real PTY · multi-session · broadcast · search · drop-file) ---------------- */
   const SESS = {}; // sessionKey -> {key,host,term,fit,search,ws,wrap,connected,ro}
   const _enc = new TextEncoder();
-  function cssvar(n) {
-    return (
-      getComputedStyle(document.querySelector(".lt-window")).getPropertyValue(n).trim() || "#000"
-    );
-  }
   function xtermTheme() {
-    const bg = cssvar("--bg"),
-      tx = cssvar("--tx"),
-      acc = cssvar("--acc"),
-      ok = cssvar("--ok"),
-      warn = cssvar("--warn"),
-      hot = cssvar("--hot"),
-      cy = cssvar("--cy"),
-      dim = cssvar("--dim"),
-      dim2 = cssvar("--dim2"),
-      tx2 = cssvar("--tx2");
+    const styles = getComputedStyle(document.querySelector(".lt-window"));
+    const token = (name) => styles.getPropertyValue(name).trim();
+    const background = token("--terminal-background"),
+      foreground = token("--terminal-foreground"),
+      cursor = token("--terminal-cursor"),
+      cursorAccent = token("--terminal-cursor-accent"),
+      selectionBackground = token("--terminal-selection"),
+      selectionForeground = token("--terminal-selection-foreground"),
+      terminalBlack = token("--terminal-black"),
+      terminalRed = token("--terminal-red"),
+      terminalGreen = token("--terminal-green"),
+      terminalYellow = token("--terminal-yellow"),
+      terminalBlue = token("--terminal-blue"),
+      terminalMagenta = token("--terminal-magenta"),
+      terminalCyan = token("--terminal-cyan"),
+      terminalWhite = token("--terminal-white"),
+      terminalBrightBlack = token("--terminal-bright-black"),
+      terminalBrightRed = token("--terminal-bright-red"),
+      terminalBrightGreen = token("--terminal-bright-green"),
+      terminalBrightYellow = token("--terminal-bright-yellow"),
+      terminalBrightBlue = token("--terminal-bright-blue"),
+      terminalBrightMagenta = token("--terminal-bright-magenta"),
+      terminalBrightCyan = token("--terminal-bright-cyan"),
+      terminalBrightWhite = token("--terminal-bright-white");
     return {
-      background: bg,
-      foreground: tx,
-      cursor: acc,
-      cursorAccent: bg,
-      selectionBackground: acc + "55",
-      black: dim2,
-      red: hot,
-      green: ok,
-      yellow: warn,
-      blue: acc,
-      magenta: acc,
-      cyan: cy,
-      white: tx2,
-      brightBlack: dim,
-      brightRed: hot,
-      brightGreen: ok,
-      brightYellow: warn,
-      brightBlue: acc,
-      brightMagenta: acc,
-      brightCyan: cy,
-      brightWhite: tx,
+      background,
+      foreground,
+      cursor,
+      cursorAccent,
+      selectionBackground,
+      selectionForeground,
+      black: terminalBlack,
+      red: terminalRed,
+      green: terminalGreen,
+      yellow: terminalYellow,
+      blue: terminalBlue,
+      magenta: terminalMagenta,
+      cyan: terminalCyan,
+      white: terminalWhite,
+      brightBlack: terminalBrightBlack,
+      brightRed: terminalBrightRed,
+      brightGreen: terminalBrightGreen,
+      brightYellow: terminalBrightYellow,
+      brightBlue: terminalBrightBlue,
+      brightMagenta: terminalBrightMagenta,
+      brightCyan: terminalBrightCyan,
+      brightWhite: terminalBrightWhite,
     };
   }
   function tabsOf(id) {
@@ -1309,7 +1313,7 @@
   function createTerm() {
     const term = new Terminal({
       fontFamily:
-        "'JetBrainsMono Nerd Font','MesloLGS NF','CaskaydiaCove Nerd Font','Hack Nerd Font','JetBrains Mono','Symbols Nerd Font Mono',ui-monospace,monospace",
+        "'Symbols Nerd Font Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
       fontSize: 12.5,
       lineHeight: 1.15,
       cursorBlink: true,
@@ -1466,8 +1470,8 @@
   function toggleFind(show) {
     const findEl = $("lt-find");
     if (!findEl) return;
-    const vis = show === undefined ? findEl.style.display === "none" : show;
-    findEl.style.display = vis ? "flex" : "none";
+    const vis = show === undefined ? findEl.hidden : show;
+    findEl.hidden = !vis;
     if (vis) {
       const input = $("lt-find-in");
       if (input) input.focus();
@@ -1481,24 +1485,18 @@
       server = byId[id];
     const view = $("lt-view");
     view.className = "lt-view flexcol";
-    view.innerHTML = `<div class="lt-term${ST.broadcast ? " bcast" : ""}"><div class="lt-term-bar"><span class="lt-led off" id="lt-term-led"></span><span>${server.kind === "wsl" ? "wsl.exe" : "ssh"} · ${esc(server.host)}${server.kind === "ssh" ? ":" + server.port : ""}</span><span id="lt-term-stat-c">…</span><span class="lt-ttabs" id="lt-ttabs"></span><span class="lt-grow"></span><span class="lt-tbtn${ST.broadcast ? " on" : ""}" data-tact="broadcast" title="Mirror keystrokes to every open session">⇉ Broadcast</span><span class="lt-tbtn" data-tact="find" title="Search scrollback (Ctrl+F)">Find</span><span class="lt-tbtn" data-tact="clear">Clear</span><span class="lt-tbtn" data-tact="reconnect">Reconnect</span></div><div class="lt-find" id="lt-find" style="display:none"><input id="lt-find-in" placeholder="search scrollback — Enter / Shift+Enter" autocomplete="off"><span class="lt-tbtn" data-tact="find-prev">▴</span><span class="lt-tbtn" data-tact="find-next">▾</span><span class="lt-tbtn" data-tact="find-close">✕</span></div><div class="lt-term-mount" id="lt-term-mount"></div></div>`;
+    view.innerHTML = `<div class="lt-term${ST.broadcast ? " bcast" : ""}"><div class="lt-term-bar"><span class="lt-led off" id="lt-term-led"></span><span>${server.kind === "wsl" ? "wsl.exe" : "ssh"} · ${esc(server.host)}${server.kind === "ssh" ? ":" + server.port : ""}</span><span id="lt-term-stat-c">…</span><span class="lt-ttabs" id="lt-ttabs"></span><span class="lt-grow"></span><span class="lt-tbtn${ST.broadcast ? " on" : ""}" data-tact="broadcast" title="Mirror keystrokes to every open session">⇉ Broadcast</span><span class="lt-tbtn" data-tact="find" title="Search scrollback (Ctrl+F)">Find</span><span class="lt-tbtn" data-tact="clear">Clear</span><span class="lt-tbtn" data-tact="reconnect">Reconnect</span></div><div class="lt-find" id="lt-find" hidden><input id="lt-find-in" placeholder="search scrollback — Enter / Shift+Enter" autocomplete="off"><span class="lt-tbtn" data-tact="find-prev">▴</span><span class="lt-tbtn" data-tact="find-next">▾</span><span class="lt-tbtn" data-tact="find-close">✕</span></div><div class="lt-term-mount" id="lt-term-mount"></div></div>`;
     const key = activeKey(id);
     if (key && SESS[key]) attachSession(key);
     else openSession(id);
   }
 
   /* ---------------- monitor (availability · trends · processes · vitals) ---------------- */
-  function tempColor(temp) {
-    return utilColor(clampPct((temp - 30) / 0.6));
-  }
-  function userColor(user) {
-    let hash = 0;
-    user = user || "";
-    for (let i = 0; i < user.length; i++) hash = (hash * 31 + user.charCodeAt(i)) % 360;
-    return `hsl(${hash} 58% 55%)`;
-  }
-  function gpuHue(ix) {
-    return `hsl(${(ix * 67) % 360} 70% 55%)`;
+  function temperatureTone(temp) {
+    if (temp < 60) return "online";
+    if (temp < 75) return "busy";
+    if (temp < 85) return "warning";
+    return "destructive";
   }
   function pushHist(id) {
     const fleet = FLEET[id];
@@ -1534,13 +1532,13 @@
                 (val, i) => `${((i / (n - 1)) * W).toFixed(2)},${((1 - val / 100) * H).toFixed(2)}`,
               )
               .join(" ");
-      svg += `<polygon points="${line} ${W},${H} 0,${H}" style="fill:${entry.color};fill-opacity:.15"></polygon><polyline points="${line}" style="stroke:${entry.color}"></polyline>`;
+      svg += `<polygon class="${entry.tone}" points="${line} ${W},${H} 0,${H}"></polygon><polyline class="${entry.tone}" points="${line}"></polyline>`;
     });
     const labs = series
       .map((entry) => {
         const lv = entry.pts.length ? entry.pts[entry.pts.length - 1] : 0,
           top = (1 - lv / 100) * 100;
-        return `<span class="lt-lc-dot" style="top:${top}%;background:${entry.color}"></span><span class="lt-lc-lab" style="top:${top}%;color:${entry.color}">${esc(entry.label)} ${Math.round(lv)}%</span>`;
+        return `<span class="lt-lc-dot ${entry.tone}" style="top:${top}%"></span><span class="lt-lc-lab ${entry.tone}" style="top:${top}%">${esc(entry.label)} ${Math.round(lv)}%</span>`;
       })
       .join("");
     return `<div class="lt-chart" data-metric="${metric || ""}"><div class="lt-chart-ax"><span>100</span><span>50</span><span>0</span></div><svg class="lt-lc" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${svg}</svg>${labs}</div>`;
@@ -1562,8 +1560,8 @@
     const gpuList = gpus(fleet),
       diskList = disks(fleet),
       GB = (m) => m / 1024;
-    const bar = (p, c, extra) =>
-      `<span class="lt-bar"><span class="lt-fill" style="width:${clampPct(p)}%;color:${c}"></span>${extra || ""}</span>`;
+    const bar = (p, tone, extra) =>
+      `<span class="lt-bar"><span class="lt-fill ${tone.startsWith("lt-chart-") ? tone : "lt-tone-" + tone}" style="width:${clampPct(p)}%"></span>${extra || ""}</span>`;
     let html = '<div class="lt-mon">';
     /* availability strip — free VRAM is the hero */
     if (gpuList.length) {
@@ -1574,13 +1572,13 @@
           mp = pct(gpu.mu, gpu.mt),
           fGB = GB(gpu.mt - gpu.mu),
           isFree = gpu.util < 10 && mp < 10,
-          mc = utilColor(mp);
+          memoryTone = utilizationTone(mp);
         html +=
-          `<div class="lt-av${isFree ? " free" : ""}"><div class="lt-av-top"><span class="lt-av-ix" style="color:${gpuHue(ix)}">GPU ${ix}</span><span class="lt-av-model">${esc(gpu.name)}</span><span class="lt-av-t" style="color:${tempColor(gpu.temp)}">${gpu.temp}°C</span></div>` +
-          `<div class="lt-av-free"><b style="color:${isFree ? "var(--ok)" : mc}">${fGB.toFixed(1)}</b><span>GB free</span>${isFree ? '<span class="lt-av-pill">FREE</span>' : `<em>${gpu.util}% util</em>`}</div>` +
+          `<div class="lt-av${isFree ? " free" : ""}"><div class="lt-av-top"><span class="lt-av-ix ${chartTone(ix)}">GPU ${ix}</span><span class="lt-av-model">${esc(gpu.name)}</span><span class="lt-av-t lt-tone-${temperatureTone(gpu.temp)}">${gpu.temp}°C</span></div>` +
+          `<div class="lt-av-free"><b class="lt-tone-${isFree ? "online" : memoryTone}">${fGB.toFixed(1)}</b><span>GB free</span>${isFree ? '<span class="lt-av-pill">FREE</span>' : `<em>${gpu.util}% util</em>`}</div>` +
           bar(
             mp,
-            mc,
+            memoryTone,
             `<span class="lt-av-mark" style="left:${clampPct(gpu.util)}%"></span>`,
           ) +
           `<div class="lt-av-sub"><span>${GB(gpu.mu).toFixed(1)} / ${GB(gpu.mt).toFixed(0)} GB</span><span>${Math.round(gpu.pow)}/${gpu.plim} W</span></div></div>`;
@@ -1594,9 +1592,9 @@
       const procs = (fleet.procs || []).slice().sort((a, b) => (b.mem || 0) - (a.mem || 0));
       html += `<div class="lt-mhd"><b>Processes</b><span class="ln"></span><span class="cnt">${procs.length}</span></div><div class="lt-panel"><div class="lt-proc-h"><span>USER</span><span>PID</span><span>GPU</span><span>VRAM</span><span>TIME</span><span>COMMAND</span></div>`;
       if (procs.length)
-        procs.forEach((proc) => {
+        procs.forEach((proc, procIndex) => {
           html +=
-            `<div class="lt-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[proc.pid] ? " open" : ""}" data-pid="${proc.pid}"><span class="lt-proc-u"><i style="color:${userColor(proc.user)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-gpu">${proc.gpu}</span><span class="lt-proc-mem">${GB(proc.mem).toFixed(1)} GB</span><span class="lt-proc-time">${esc(proc.etime || "")}</span><span class="lt-proc-cmd" title="${esc(proc.cmd || "")}">${esc(proc.cmd || "")}</span></div>` +
+            `<div class="lt-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[proc.pid] ? " open" : ""}" data-pid="${proc.pid}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-gpu">${proc.gpu}</span><span class="lt-proc-mem">${GB(proc.mem).toFixed(1)} GB</span><span class="lt-proc-time">${esc(proc.etime || "")}</span><span class="lt-proc-cmd" title="${esc(proc.cmd || "")}">${esc(proc.cmd || "")}</span></div>` +
             (ST.procOpen[proc.pid] ? `<div class="lt-proc-full">${esc(proc.cmd || "")}</div>` : "");
         });
       else
@@ -1613,7 +1611,7 @@
         "CPU load",
         `${fleet.load ? fleet.load[0] : "—"} / ${fleet.ncpu || "?"}`,
         lp,
-        utilColor(lp),
+        utilizationTone(lp),
         `${Math.round(lp)}% of ${fleet.ncpu || "?"} cores`,
       );
       if (fleet.mem) {
@@ -1622,7 +1620,7 @@
           "System RAM",
           `${bytes(fleet.mem.used)} / ${bytes(fleet.mem.total)}`,
           mp,
-          "var(--cy)",
+          "lt-chart-tone-2",
           mp + "% used",
         );
       }
@@ -1633,7 +1631,7 @@
         disk.m,
         `${bytes(disk.used)} / ${bytes(disk.size)}`,
         p,
-        utilColor(p),
+        utilizationTone(p),
         `${bytes(disk.size - disk.used)} free · ${p}%`,
       );
     });
@@ -1649,7 +1647,7 @@
             samples = ST.hist[id + ":" + ix] || [{ u: gpu.util, m: pct(gpu.mu, gpu.mt) }];
           return {
             label: "GPU" + ix,
-            color: gpuHue(ix),
+            tone: chartTone(ix),
             pts: samples.map((sample) => sample[which]),
           };
         });
@@ -1766,7 +1764,7 @@
       series
         .map((s) => {
           const v = s.pts[Math.min(idx, s.pts.length - 1)] || 0;
-          return `<div><span style="color:${s.color}">●</span> ${esc(s.label)} <b>${Math.round(v)}%</b></div>`;
+          return `<div><span class="${s.tone}">●</span> ${esc(s.label)} <b>${Math.round(v)}%</b></div>`;
         })
         .join("");
     tip.style.display = "block";
@@ -2145,7 +2143,6 @@
       return;
     }
     byId = Object.fromEntries(SERVERS.map((server) => [server.id, server]));
-    SIDX = Object.fromEntries(SERVERS.map((server, i) => [server.id, i]));
     ST.active = SERVERS[0] && SERVERS[0].id;
     renderAll();
     startXfer();
