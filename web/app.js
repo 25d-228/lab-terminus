@@ -93,18 +93,11 @@
     sessSeq: 0,
     listing: null,
     loadSeq: 0,
-    alert: false,
     collapsed: {},
     hist: {},
     procOpen: {},
     chart: null,
     monTimer: null,
-    vimNav: false,
-    zoom: 1,
-    focus: "main",
-    sideCur: null,
-    _exItems: [],
-    _lastG: 0,
   };
 
   let toastT;
@@ -209,8 +202,7 @@
           right = `<span class="lt-sv-pct" style="color:${utilColor(gpu.avg)}">${gpu.avg}%</span>`;
         else if (disk && server.kind === "nas")
           right = `<span class="lt-sv-pct">${pct(disk.used, disk.size)}%</span>`;
-        const curClass = ST.vimNav && ST.focus === "side" && server.id === ST.sideCur ? " cur" : "";
-        html += `<div class="lt-sv${ST.view === "server" && server.id === ST.active ? " on" : ""}${curClass}" data-sv="${server.id}"><span class="lt-svi" style="${svTile(server.id)}">${esc(svCode(server))}<span class="lt-st ${statusDot(status)}"></span></span><span class="lt-svt"><span class="lt-sv-name">${esc(server.name)}</span><span class="lt-sv-sub">${esc(svSub(server))}</span></span>${right}</div>`;
+        html += `<div class="lt-sv${ST.view === "server" && server.id === ST.active ? " on" : ""}" data-sv="${server.id}"><span class="lt-svi" style="${svTile(server.id)}">${esc(svCode(server))}<span class="lt-st ${statusDot(status)}"></span></span><span class="lt-svt"><span class="lt-sv-name">${esc(server.name)}</span><span class="lt-sv-sub">${esc(svSub(server))}</span></span>${right}</div>`;
       });
     });
     $("lt-side").innerHTML = html;
@@ -229,7 +221,6 @@
         ST.listing = null;
         renderAll();
       } // the open server was removed (e.g. config hand-edit)
-      if (ST.sideCur && !byId[ST.sideCur]) ST.sideCur = ST.active || (SERVERS[0] && SERVERS[0].id); // vim cursor's server vanished
       renderSide();
     } catch (e) {}
   }
@@ -302,15 +293,12 @@
       )
       .join("");
     (document.querySelector(".lt-window") || document.body).appendChild(menu);
-    // .lt-ctx is position:fixed inside the zoomed .lt-window, so map the real viewport
-    // coords (x,y) into the element's zoomed local space by dividing by the zoom factor.
-    const zoom = ST.zoom || 1;
     const MENU_WIDTH = 198,
       BOTTOM_MARGIN = 14,
       ITEM_HEIGHT = 34; // ITEM_HEIGHT must track the .lt-ctx-i row height in style.css
-    menu.style.left = Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH) / zoom) + "px";
+    menu.style.left = Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH)) + "px";
     menu.style.top =
-      Math.max(0, Math.min(y, window.innerHeight - BOTTOM_MARGIN - items.length * ITEM_HEIGHT) / zoom) +
+      Math.max(0, Math.min(y, window.innerHeight - BOTTOM_MARGIN - items.length * ITEM_HEIGHT)) +
       "px";
     menu.addEventListener("click", (ev) => {
       const target = ev.target.closest("[data-ci]");
@@ -853,7 +841,6 @@
         if (x > y) return asc;
         return 0;
       });
-      ST._exItems = items; // ordered visible rows — drives j/k cursor movement (vim nav)
       if (!items.length)
         table += `<div class="lt-empty">Empty folder${ST.filter ? " (filter active)" : ""}.</div>`;
       items.forEach((entry) => {
@@ -1680,8 +1667,6 @@
       html += `<div class="lt-mhd"><b>Utilization</b><span class="ln"></span><span class="cnt">% · last ${span < 2 ? "now" : mins + " min"}</span></div>${lineChart(utilSeries, null, "u")}`;
       html += `<div class="lt-mhd"><b>VRAM</b><span class="ln"></span><span class="cnt">% of total · 90% danger</span></div>${lineChart(vramSeries, 90, "m")}`;
     }
-    if (gpuList.length)
-      html += `<div class="lt-alert${ST.alert ? " on" : ""}" id="lt-alert" style="margin-top:8px"><span class="tog"></span><div><b>Alert me when a GPU here is free for 10 minutes</b><br><span>Desktop notification — grab it before someone else does.</span></div></div>`;
     html += "</div>";
     view.innerHTML = html;
   }
@@ -1771,13 +1756,10 @@
       idx = Math.min(n - 1, Math.max(0, Math.round(Math.min(1, Math.max(0, fracX)) * (n - 1))));
     const px = rect.left + L + (n < 2 ? plotWidth : (idx / (n - 1)) * plotWidth);
     const { t: tip, g: guide } = ensureChartTip();
-    // tip/guide live inside the zoomed .lt-window; getBoundingClientRect/clientX are visual
-    // (zoomed) coords, so divide by zoom to map them into the element's local space.
-    const zoom = ST.zoom || 1;
     guide.style.display = "block";
-    guide.style.left = px / zoom + "px";
-    guide.style.top = rect.top / zoom + "px";
-    guide.style.height = rect.height / zoom + "px";
+    guide.style.left = px + "px";
+    guide.style.top = rect.top + "px";
+    guide.style.height = rect.height + "px";
     const agoSec = (n - 1 - idx) * data.sec;
     tip.innerHTML =
       `<div class="tt">${agoSec <= 0 ? "now" : "~" + agoSec + "s ago"}</div>` +
@@ -1788,11 +1770,11 @@
         })
         .join("");
     tip.style.display = "block";
-    const tipWidth = tip.offsetWidth * zoom;
+    const tipWidth = tip.offsetWidth;
     let tipX = px + 12;
     if (tipX + tipWidth > window.innerWidth - 8) tipX = px - tipWidth - 12;
-    tip.style.left = tipX / zoom + "px";
-    tip.style.top = (rect.top + 6) / zoom + "px";
+    tip.style.left = tipX + "px";
+    tip.style.top = rect.top + 6 + "px";
   });
   function renderAll() {
     renderSide();
@@ -1802,8 +1784,6 @@
   function openServer(id, tab) {
     ST.view = "server";
     ST.active = id;
-    ST.focus = "main";
-    ST.sideCur = id;
     if (tab) ST.tab = tab;
     ST.sel = null;
     ST.filter = "";
@@ -1837,27 +1817,6 @@
     }
     if (e.target.closest("[data-ssubmit]")) {
       submitSendTo();
-      return;
-    }
-    if (e.target.closest("[data-settings]")) {
-      openSettings();
-      return;
-    }
-    if (e.target.id === "lt-settings" || e.target.closest("[data-setclose]")) {
-      closeSettings();
-      return;
-    }
-    {
-      const z = e.target.closest("[data-zoom]");
-      if (z) {
-        zoomStep(z.getAttribute("data-zoom") === "1" ? 0.1 : -0.1);
-        return;
-      }
-    }
-    if (e.target.closest("[data-vimtoggle]")) {
-      setVim(!ST.vimNav);
-      const legend = document.querySelector("#lt-settings .lt-set-legend");
-      if (legend) legend.classList.toggle("dim", !ST.vimNav);
       return;
     }
     if (e.target.closest("#lt-xfer-btn")) {
@@ -1908,8 +1867,6 @@
       try {
         localStorage.setItem("lt-collapsed", JSON.stringify(ST.collapsed));
       } catch (e) {}
-      if (ST.vimNav && ST.sideCur && !sideOrder().includes(ST.sideCur))
-        ST.sideCur = sideOrder()[0] || null;
       renderSide();
       return;
     }
@@ -2072,13 +2029,6 @@
       viewMonitor();
       return;
     }
-    const alertEl = e.target.closest("#lt-alert");
-    if (alertEl) {
-      ST.alert = !ST.alert;
-      alertEl.classList.toggle("on", ST.alert);
-      toast(ST.alert ? "Alert on (prototype)" : "Alert off");
-      return;
-    }
   });
   document.addEventListener("input", (e) => {
     if (e.target.id === "lt-filter") {
@@ -2103,19 +2053,12 @@
     if (e.target.id === "lt-hidden") {
       ST.hidden = e.target.checked;
       renderExplorer();
-    } else if (e.target.name === "ltpal") {
-      localStorage.setItem("lt-pal", e.target.id.replace("th-", ""));
-      updateTermThemes();
     } else if (e.target.id === "lt-day") {
       localStorage.setItem("lt-mode", e.target.checked ? "day" : "night");
       updateTermThemes();
     }
   });
   document.addEventListener("keydown", (e) => {
-    if ($("lt-settings") && e.key === "Escape") {
-      closeSettings();
-      return;
-    }
     if ($("lt-modal")) {
       if (e.key === "Escape") {
         closeModal();
@@ -2142,335 +2085,9 @@
     }
   });
 
-  /* ---------------- settings: UI zoom + vim navigation ---------------- */
-  function refitTerm() {
-    const session = SESS[activeKey(ST.active)];
-    if (session) {
-      try {
-        session.fit.fit();
-      } catch (e) {}
-    }
-  }
-  function applyZoom() {
-    const win = document.querySelector(".lt-window");
-    if (win) {
-      const zoom = ST.zoom || 1;
-      win.style.zoom = zoom;
-      // .lt-window is locked to 100vh/100% under body{overflow:hidden}; pre-shrink it by 1/z so
-      // that after the ×z zoom it still fills the OS window exactly (no clipped status bar / edge).
-      win.style.width = 100 / zoom + "%";
-      win.style.height = 100 / zoom + "vh";
-    }
-    const label = $("lt-set-zoom");
-    if (label) label.textContent = Math.round((ST.zoom || 1) * 100) + "%";
-    setTimeout(refitTerm, 30);
-  }
-  function setZoom(zoom) {
-    ST.zoom = Math.max(0.7, Math.min(1.6, Math.round(zoom * 20) / 20));
-    try {
-      localStorage.setItem("lt-zoom", ST.zoom);
-    } catch (e) {}
-    applyZoom();
-  }
-  function zoomStep(delta) {
-    setZoom((ST.zoom || 1) + delta);
-  }
-  function setVim(on) {
-    ST.vimNav = !!on;
-    try {
-      localStorage.setItem("lt-vim", on ? "1" : "0");
-    } catch (e) {}
-    if (on && !ST.sideCur) ST.sideCur = ST.active || sideOrder()[0];
-    renderSide();
-    const toggle = $("lt-set-vim");
-    if (toggle) toggle.classList.toggle("on", ST.vimNav);
-    toast(on ? "Vim navigation on — h j k l" : "Vim navigation off");
-  }
-  function openSettings() {
-    if ($("lt-settings")) {
-      closeSettings();
-      return;
-    }
-    const el = document.createElement("div");
-    el.id = "lt-settings";
-    el.className = "lt-modal";
-    el.innerHTML = settingsHtml();
-    (document.querySelector(".lt-window") || document.body).appendChild(el);
-  }
-  function closeSettings() {
-    const el = $("lt-settings");
-    if (el) el.remove();
-  }
-  function settingsHtml() {
-    return `<div class="lt-modal-card"><div class="lt-modal-h"><b style="font-family:var(--f-display);font-size:15px;color:var(--tx)">Settings</b><span class="lt-modal-x" data-setclose="1">✕</span></div>
- <div class="lt-modal-b">
-  <div class="lt-set-row"><div class="lt-set-lab"><b>Interface size</b><span>Zoom the whole UI. Shortcut: Ctrl&nbsp;+ / Ctrl&nbsp;− / Ctrl&nbsp;0</span></div><div class="lt-zoomctl"><span class="lt-zbtn" data-zoom="-1" title="Zoom out">−</span><b id="lt-set-zoom">${Math.round((ST.zoom || 1) * 100)}%</b><span class="lt-zbtn" data-zoom="1" title="Zoom in">＋</span></div></div>
-  <div class="lt-set-row"><div class="lt-set-lab"><b>Vim navigation</b><span>Move between panels and tabs with h&nbsp;j&nbsp;k&nbsp;l.</span></div><span class="lt-toggle${ST.vimNav ? " on" : ""}" id="lt-set-vim" data-vimtoggle="1"><i></i></span></div>
-  <div class="lt-set-legend${ST.vimNav ? "" : " dim"}"><div><kbd>j</kbd><kbd>k</kbd> down / up &nbsp;·&nbsp; <kbd>l</kbd>/<kbd>↵</kbd> open / enter &nbsp;·&nbsp; <kbd>h</kbd> up a folder / sidebar</div><div><kbd>Ctrl</kbd><kbd>h</kbd>/<kbd>l</kbd> switch panel &nbsp;·&nbsp; <kbd>⇧H</kbd>/<kbd>⇧L</kbd> switch tab &nbsp;·&nbsp; <kbd>gg</kbd>/<kbd>G</kbd> top / bottom</div><div>In the Terminal, plain keys go to the shell — use <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>h</kbd>/<kbd>l</kbd> for tabs, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>k</kbd> for sidebar.</div></div>
- </div>
- <div class="lt-modal-f"><span class="lt-btn" data-setclose="1">Done</span></div></div>`;
-  }
-
-  function sideOrder() {
-    const out = [];
-    (FOLDERS.length ? FOLDERS : [{ key: "lab" }]).forEach((folder) => {
-      if (folderCollapsed(folder.key)) return;
-      SERVERS.filter((server) => (server.group || "lab") === folder.key).forEach((server) =>
-        out.push(server.id),
-      );
-    });
-    return out;
-  }
-  function scrollCur(sel) {
-    const el = document.querySelector(sel);
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
-  }
-  function setFocus(which) {
-    if (which === "main" && ST.view !== "server") return;
-    ST.focus = which;
-    if (which === "side") {
-      if (!ST.sideCur) ST.sideCur = ST.active || sideOrder()[0];
-      renderSide();
-      scrollCur(".lt-sv.cur");
-    } else {
-      renderSide();
-      if (ST.tab === "terminal") {
-        const session = SESS[activeKey(ST.active)];
-        if (session)
-          setTimeout(() => {
-            try {
-              session.term.focus();
-            } catch (e) {}
-          }, 0);
-      }
-    }
-  }
-  function cycleTab(dir) {
-    if (ST.view !== "server") return;
-    const server = byId[ST.active];
-    if (!server) return;
-    const tabKeys = tabsFor(server).map((tab) => tab[0]);
-    let i = tabKeys.indexOf(ST.tab);
-    if (i < 0) i = 0;
-    ST.tab = tabKeys[(i + dir + tabKeys.length) % tabKeys.length];
-    ST.sel = null;
-    ST.focus = "main";
-    renderHeadTabs();
-    renderView();
-  }
-  function vimMove(dir) {
-    if (ST.view === "fleet" || ST.focus === "side") {
-      const order = sideOrder();
-      if (!order.length) return;
-      let i = order.indexOf(ST.sideCur);
-      if (i < 0) {
-        // cursor's folder was collapsed — snap to the nearest still-visible server by full order
-        const fullOrder = SERVERS.map((server) => server.id),
-          fullPos = fullOrder.indexOf(ST.sideCur);
-        if (fullPos < 0) {
-          i = dir > 0 ? 0 : order.length - 1;
-        } else if (dir > 0) {
-          i = order.findIndex((id) => fullOrder.indexOf(id) >= fullPos);
-          if (i < 0) i = order.length - 1;
-        } else {
-          i = 0;
-          for (let n = order.length - 1; n >= 0; n--) {
-            if (fullOrder.indexOf(order[n]) <= fullPos) {
-              i = n;
-              break;
-            }
-          }
-        }
-      } else {
-        i = Math.max(0, Math.min(order.length - 1, i + dir));
-      }
-      ST.sideCur = order[i];
-      if (ST.focus !== "side" && ST.view !== "fleet") ST.focus = "side";
-      renderSide();
-      scrollCur(".lt-sv.cur");
-      return;
-    }
-    if (ST.tab === "explorer") {
-      const items = ST._exItems || [];
-      if (!items.length) return;
-      let i = ST.sel ? items.findIndex((row) => row.name === ST.sel.name) : -1;
-      if (i < 0) {
-        i = dir > 0 ? 0 : items.length - 1;
-      } else {
-        i = Math.max(0, Math.min(items.length - 1, i + dir));
-      }
-      const row = items[i];
-      ST.sel = { name: row.name, dir: row.isdir, size: row.size, mtime: row.mtime };
-      renderExplorer();
-      scrollCur(".lt-fr.sel");
-      return;
-    }
-    if (ST.tab === "monitor") {
-      const view = $("lt-view");
-      if (view) view.scrollBy({ top: dir * 90 });
-    }
-  }
-  function vimEnter() {
-    if (ST.view === "fleet" || ST.focus === "side") {
-      if (ST.sideCur) openServer(ST.sideCur);
-      return;
-    }
-    if (ST.tab === "explorer" && ST.sel && ST.sel.dir) {
-      const cwd = ST.cwd[ST.active] || "/";
-      ST.filter = "";
-      enterDir(ST.active, joinp(cwd, ST.sel.name));
-    }
-  }
-  function vimLeft() {
-    if (ST.focus === "main" && ST.tab === "explorer") {
-      const cwd = ST.cwd[ST.active] || "/";
-      const parent = (ST.listing && ST.listing.parent) || parentOf(cwd);
-      if (parent && parent !== cwd) {
-        ST.sel = null;
-        loadDir(ST.active, parent);
-        return;
-      }
-    }
-    setFocus("side");
-  }
-  function vimJump(where) {
-    if (ST.view === "fleet" || ST.focus === "side") {
-      const order = sideOrder();
-      if (!order.length) return;
-      ST.sideCur = where === "top" ? order[0] : order[order.length - 1];
-      renderSide();
-      scrollCur(".lt-sv.cur");
-      return;
-    }
-    if (ST.tab === "explorer") {
-      const items = ST._exItems || [];
-      if (!items.length) return;
-      const row = where === "top" ? items[0] : items[items.length - 1];
-      ST.sel = { name: row.name, dir: row.isdir, size: row.size, mtime: row.mtime };
-      renderExplorer();
-      scrollCur(".lt-fr.sel");
-    }
-  }
-  function vimKey(e) {
-    const target = e.target,
-      tag = (target.tagName || "").toUpperCase();
-    const inTerm = ST.view === "server" && ST.tab === "terminal";
-    const editing =
-      tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
-    const formInput = editing && !(inTerm && tag === "TEXTAREA"); // a real form field, not the terminal's textarea
-    // global shortcuts (work regardless of vim setting) — but never steal from a form field
-    if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !formInput) {
-      if (e.key === ",") {
-        e.preventDefault();
-        openSettings();
-        return;
-      }
-      if (e.key === "=" || e.key === "+") {
-        e.preventDefault();
-        zoomStep(0.05);
-        return;
-      }
-      if (e.key === "-" || e.key === "_") {
-        e.preventDefault();
-        zoomStep(-0.05);
-        return;
-      }
-      if (e.key === "0") {
-        e.preventDefault();
-        setZoom(1);
-        return;
-      }
-    }
-    if (!ST.vimNav) return;
-    if ($("lt-modal") || $("lt-settings") || $("lt-prompt") || $("lt-sendto") || $("lt-ctx"))
-      return; // a dialog/menu owns the keys
-    // Ctrl+Alt combos: terminal-safe (no shell/editor binds these), so they work everywhere
-    if (e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey) {
-      const key = (e.key || "").toLowerCase();
-      if (key === "h" || e.key === "ArrowLeft") {
-        e.preventDefault();
-        cycleTab(-1);
-        return;
-      }
-      if (key === "l" || e.key === "ArrowRight") {
-        e.preventDefault();
-        cycleTab(1);
-        return;
-      }
-      if (key === "k") {
-        e.preventDefault();
-        setFocus("side");
-        return;
-      }
-      if (key === "j") {
-        e.preventDefault();
-        setFocus("main");
-        return;
-      }
-    }
-    if (editing || inTerm || e.metaKey) return; // don't steal keys from typing or the shell
-    if (e.shiftKey && !e.ctrlKey && !e.altKey) {
-      if (e.key === "H") {
-        e.preventDefault();
-        cycleTab(-1);
-        return;
-      }
-      if (e.key === "L") {
-        e.preventDefault();
-        cycleTab(1);
-        return;
-      }
-      if (e.key === "G") {
-        e.preventDefault();
-        vimJump("bottom");
-        return;
-      }
-      return;
-    }
-    if (e.ctrlKey && !e.altKey && !e.shiftKey) {
-      if (e.key === "h") {
-        e.preventDefault();
-        setFocus("side");
-        return;
-      }
-      if (e.key === "l") {
-        e.preventDefault();
-        setFocus("main");
-        return;
-      }
-      return;
-    }
-    if (e.ctrlKey || e.altKey) return;
-    if (e.key === "j") {
-      e.preventDefault();
-      vimMove(1);
-    } else if (e.key === "k") {
-      e.preventDefault();
-      vimMove(-1);
-    } else if (e.key === "h") {
-      e.preventDefault();
-      vimLeft();
-    } else if (e.key === "l" || e.key === "Enter") {
-      e.preventDefault();
-      vimEnter();
-    } else if (e.key === "g") {
-      e.preventDefault();
-      const now = performance.now();
-      if (ST._lastG && now - ST._lastG < 600) {
-        ST._lastG = 0;
-        vimJump("top");
-      } else ST._lastG = now;
-    }
-  }
-  document.addEventListener("keydown", vimKey, true); // capture phase: beat xterm for the Ctrl+Alt combos
-
   /* ---------------- init + polling ---------------- */
   function applyTheme() {
-    const pal = localStorage.getItem("lt-pal") || "sol",
-      mode = localStorage.getItem("lt-mode") || "day";
-    const radio = $("th-" + pal);
-    if (radio) radio.checked = true;
-    $("lt-day").checked = mode !== "night";
+    $("lt-day").checked = (localStorage.getItem("lt-mode") || "day") !== "night";
   }
   async function poll() {
     if (document.hidden) return; // hidden to tray / background tab: don't hammer SSH for an invisible UI
@@ -2509,10 +2126,6 @@
   }
   async function init() {
     applyTheme();
-    ST.vimNav = localStorage.getItem("lt-vim") === "1";
-    const zoom = parseFloat(localStorage.getItem("lt-zoom"));
-    if (zoom >= 0.7 && zoom <= 1.6) ST.zoom = zoom;
-    applyZoom();
     try {
       ST.collapsed = JSON.parse(localStorage.getItem("lt-collapsed") || "{}") || {};
     } catch (e) {}
@@ -2534,7 +2147,6 @@
     byId = Object.fromEntries(SERVERS.map((server) => [server.id, server]));
     SIDX = Object.fromEntries(SERVERS.map((server, i) => [server.id, i]));
     ST.active = SERVERS[0] && SERVERS[0].id;
-    ST.sideCur = ST.active;
     renderAll();
     startXfer();
     pollLoop();
@@ -2559,7 +2171,7 @@
     }
   });
   /* drag the frameless window by the titlebar (explicit startDragging — auto drag-region isn't injected for an external-URL window) */
-  const _wcSel = ".lt-wc,.lt-theme,.lt-kbd,.lt-gear,button,a,input,select";
+  const _wcSel = ".lt-wc,.lt-theme,.lt-kbd,button,a,input,select";
   document.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     const titlebar = e.target.closest(".lt-titlebar");
