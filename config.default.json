@@ -1,0 +1,8 @@
+{
+  "servers": [],
+  "folders": [
+    { "key": "lab", "title": "Lab Servers" },
+    { "key": "this", "title": "This Machine" },
+    { "key": "storage", "title": "Storage" }
+  ]
+}

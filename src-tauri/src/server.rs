@@ -31,7 +31,10 @@ pub fn router() -> Router {
         .route("/api/transfers", get(crate::transfers::list))
         .route("/api/transfers/copy", post(crate::transfers::copy))
         .route("/api/transfers/clear", post(crate::transfers::clear))
-        .route("/api/transfers/{jid}/cancel", post(crate::transfers::cancel))
+        .route(
+            "/api/transfers/{jid}/cancel",
+            post(crate::transfers::cancel),
+        )
         .route("/api/{id}/download", get(crate::transfers::download))
         .route("/api/{id}/upload", post(crate::transfers::upload))
         // streamed uploads can be arbitrarily large — drop axum's 2 MiB default cap

@@ -4,7 +4,7 @@
 //!   - copy     : remote → remote (server↔server, server↔NAS), streamed in chunks
 //!   - upload   : browser → SSH host (drag-drop / ⇪ button), request body streamed to SFTP
 //!   - download : SSH/NAS host → browser (<a href> → the window's on_download handler
-//!                saves it to the user's Downloads folder)
+//!     saves it to the user's Downloads folder)
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -80,7 +80,11 @@ fn now() -> f64 {
 }
 
 fn create_job(kind: &'static str, label: String, total: u64) -> (String, Arc<AtomicBool>) {
-    let id = format!("{:x}{:x}", SEQ.fetch_add(1, Ordering::Relaxed), now() as u64);
+    let id = format!(
+        "{:x}{:x}",
+        SEQ.fetch_add(1, Ordering::Relaxed),
+        now() as u64
+    );
     let cancel = Arc::new(AtomicBool::new(false));
     let job = Job {
         id: id.clone(),
@@ -146,6 +150,7 @@ async fn open_sftp_session(s: &config::Server) -> Result<russh_sftp::client::Sft
         .map_err(|e| e.to_string())
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Reader {
     Sftp(russh_sftp::client::fs::File),
     Http(Box<dyn tokio::io::AsyncRead + Send + Unpin>),
@@ -309,8 +314,7 @@ async fn copy_worker(
             "nas" => {
                 // DSM rejects chunked uploads, so the multipart needs a known length.
                 if total > 0 {
-                    copy_to_nas_streamed(&id, cancel.clone(), reader, &dst_dir, &name, total)
-                        .await
+                    copy_to_nas_streamed(&id, cancel.clone(), reader, &dst_dir, &name, total).await
                 } else {
                     // size unknown — buffer (rare: only NAS→NAS of unknown length)
                     let mut data = Vec::new();
@@ -394,12 +398,7 @@ pub async fn copy(Json(b): Json<CopyBody>) -> Response {
     if b.src.path.is_empty() || b.dst.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "bad src/dst").into_response();
     }
-    let label = format!(
-        "{} : {}  →  {}",
-        src.name,
-        basename(&b.src.path),
-        dst.name
-    );
+    let label = format!("{} : {}  →  {}", src.name, basename(&b.src.path), dst.name);
     let (id, cancel) = create_job("copy", label, b.src.size.unwrap_or(0));
     let (sp, dp) = (b.src.path.clone(), b.dst.path.clone());
     tokio::spawn(copy_worker(id.clone(), cancel, src, sp, dst, dp));
@@ -438,10 +437,7 @@ pub async fn download(Path(id): Path<String>, Query(q): Query<DlQuery>) -> Respo
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(
             header::CONTENT_DISPOSITION,
-            format!(
-                "attachment; filename*=UTF-8''{}",
-                urlencode(&name)
-            ),
+            format!("attachment; filename*=UTF-8''{}", urlencode(&name)),
         );
     if total > 0 {
         resp = resp.header(header::CONTENT_LENGTH, total.to_string());
@@ -472,7 +468,10 @@ pub async fn upload(Path(id): Path<String>, Query(q): Query<UpQuery>, req: Reque
         return (StatusCode::NOT_FOUND, "unknown server").into_response();
     };
     if s.kind != "ssh" {
-        return (StatusCode::BAD_REQUEST, "upload supported on SSH hosts only (for now)")
+        return (
+            StatusCode::BAD_REQUEST,
+            "upload supported on SSH hosts only (for now)",
+        )
             .into_response();
     }
     let total: u64 = req
@@ -515,7 +514,10 @@ pub async fn upload(Path(id): Path<String>, Query(q): Query<UpQuery>, req: Reque
                     j.error = Some(e.clone());
                 }
             });
-            (StatusCode::BAD_REQUEST, if canceled { "canceled".into() } else { e })
+            (
+                StatusCode::BAD_REQUEST,
+                if canceled { "canceled".into() } else { e },
+            )
                 .into_response()
         }
     }

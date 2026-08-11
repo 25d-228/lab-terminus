@@ -55,6 +55,7 @@ async fn send_err(socket: &mut WebSocket, msg: &str) {
     let _ = socket.close().await;
 }
 
+#[allow(clippy::collapsible_match)]
 async fn ssh_pty(s: Server, mut socket: WebSocket, cols: u16, rows: u16) {
     let handle = match ssh::connect(&s).await {
         Ok(h) => h,
@@ -105,7 +106,12 @@ async fn wsl_pty(socket: WebSocket, cols: u16, rows: u16) {
         .and_then(|w| w.distro.clone())
         .unwrap_or_else(|| "Ubuntu".into());
     let sys = native_pty_system();
-    let Ok(pair) = sys.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) else {
+    let Ok(pair) = sys.openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) else {
         return;
     };
     let mut cmd = CommandBuilder::new("wsl.exe");

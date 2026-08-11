@@ -10,7 +10,9 @@
 //! mutation) bumps REV, which /api/fleet exposes so the frontend refreshes its registry.
 //! Unknown JSON fields are preserved via #[serde(flatten)] so hand-edits survive a save.
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -86,9 +88,8 @@ pub struct Config {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-// Baked-in default registry (the lab fleet), used to seed the APPDATA config on first run.
-// NOTE: embeds config.local.json (incl. NAS creds) — fine for a personal build; don't redistribute.
-const DEFAULT_CONFIG: &str = include_str!("../../config.local.json");
+// Sanitized default registry, used to seed the per-user config on first run.
+const DEFAULT_CONFIG: &str = include_str!("../../config.default.json");
 
 const DEFAULT_FOLDERS: &[(&str, &str)] = &[
     ("lab", "Lab Servers"),
@@ -109,51 +110,112 @@ static REV: AtomicU64 = AtomicU64::new(1);
 // actions / watcher reloads can't lose each other's updates.
 static MUT_LOCK: Mutex<()> = Mutex::new(());
 
-fn dev_path() -> Option<PathBuf> {
-    let mut cands: Vec<PathBuf> = vec!["config.local.json".into(), "../config.local.json".into()];
-    if let Ok(exe) = std::env::current_exe() {
-        let mut dir_cursor = exe.parent().map(|p| p.to_path_buf());
+fn dev_path(current_dir: &Path, executable: Option<&Path>) -> Option<PathBuf> {
+    let mut candidates = vec![current_dir.join("config.local.json")];
+    if let Some(parent) = current_dir.parent() {
+        candidates.push(parent.join("config.local.json"));
+    }
+    if let Some(executable) = executable {
+        let mut dir_cursor = executable.parent().map(Path::to_path_buf);
         for _ in 0..DEV_CONFIG_SEARCH_DEPTH {
             if let Some(dir) = &dir_cursor {
-                cands.push(dir.join("config.local.json"));
-                dir_cursor = dir.parent().map(|p| p.to_path_buf());
+                candidates.push(dir.join("config.local.json"));
+                dir_cursor = dir.parent().map(Path::to_path_buf);
             }
         }
     }
-    cands.into_iter().find(|p| p.exists())
+    candidates.into_iter().find(|path| path.exists())
 }
 
-fn appdata_path() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
+fn appdata_path(appdata: Option<&OsStr>, home: Option<&OsStr>) -> PathBuf {
+    let base = appdata
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-        })
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("LabTerminus").join("config.json")
+}
+
+struct SelectedPath {
+    path: PathBuf,
+    seed_default: bool,
+}
+
+fn select_path(
+    explicit: Option<&OsStr>,
+    current_dir: &Path,
+    executable: Option<&Path>,
+    user_path: PathBuf,
+) -> SelectedPath {
+    if let Some(path) = explicit {
+        return SelectedPath {
+            path: PathBuf::from(path),
+            seed_default: false,
+        };
+    }
+    if let Some(path) = dev_path(current_dir, executable) {
+        return SelectedPath {
+            path,
+            seed_default: false,
+        };
+    }
+    SelectedPath {
+        path: user_path,
+        seed_default: true,
+    }
+}
+
+/// Seed only a missing file. `create_new` prevents a concurrent or invalid existing
+/// runtime config from being replaced.
+fn seed_default(path: &Path) -> std::io::Result<bool> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(DEFAULT_CONFIG.as_bytes())?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// The file the app actually reads/writes (resolved once).
 pub fn path() -> &'static PathBuf {
     PATH.get_or_init(|| {
-        if let Ok(p) = std::env::var("LAB_TERMINUS_CONFIG") {
-            return PathBuf::from(p);
-        }
-        if let Some(p) = dev_path() {
-            return p;
-        }
-        let p = appdata_path();
-        if !p.exists() {
-            if let Some(dir) = p.parent() {
-                let _ = std::fs::create_dir_all(dir);
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let executable = std::env::current_exe().ok();
+        let user_path = appdata_path(
+            std::env::var_os("APPDATA").as_deref(),
+            std::env::var_os("HOME").as_deref(),
+        );
+        let selected = select_path(
+            std::env::var_os("LAB_TERMINUS_CONFIG").as_deref(),
+            &current_dir,
+            executable.as_deref(),
+            user_path,
+        );
+        if selected.seed_default {
+            match seed_default(&selected.path) {
+                Ok(true) => eprintln!(
+                    "[config] seeded default config at {}",
+                    selected.path.display()
+                ),
+                Ok(false) => {}
+                Err(error) => eprintln!(
+                    "[config] could not seed {}: {error}",
+                    selected.path.display()
+                ),
             }
-            if let Err(e) = std::fs::write(&p, DEFAULT_CONFIG) {
-                eprintln!("[config] could not seed {}: {e}", p.display());
-            } else {
-                eprintln!("[config] seeded default config at {}", p.display());
-            }
         }
-        p
+        selected.path
     })
 }
 
@@ -214,33 +276,33 @@ fn parse_port(v: &serde_json::Value) -> Option<u16> {
     u16::try_from(n).ok().filter(|p| *p > 0)
 }
 
-/// Parse the active file. Tolerates a UTF-8 BOM (Notepad writes one).
-fn read_file() -> Option<Config> {
-    let p = path();
-    match std::fs::read_to_string(p) {
-        Ok(text) => match serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')) {
-            Ok(cfg) => Some(normalize(cfg)),
-            Err(e) => {
-                eprintln!("[config] parse error in {}: {e}", p.display());
+/// Parse config text. Tolerates a UTF-8 BOM (Notepad writes one).
+fn parse_config(text: &str) -> Result<Config, serde_json::Error> {
+    serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')).map(normalize)
+}
+
+fn read_file(path: &Path) -> Option<Config> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match parse_config(&text) {
+            Ok(config) => Some(config),
+            Err(error) => {
+                eprintln!("[config] parse error in {}: {error}", path.display());
                 None
             }
         },
-        Err(e) => {
-            eprintln!("[config] read error {}: {e}", p.display());
+        Err(error) => {
+            eprintln!("[config] read error {}: {error}", path.display());
             None
         }
     }
 }
 
 fn baked() -> Config {
-    match serde_json::from_str::<Config>(DEFAULT_CONFIG) {
-        Ok(cfg) => normalize(cfg),
-        Err(_) => Config::default(),
-    }
+    parse_config(DEFAULT_CONFIG).unwrap_or_default()
 }
 
 fn state() -> &'static RwLock<Arc<Config>> {
-    STATE.get_or_init(|| RwLock::new(Arc::new(read_file().unwrap_or_else(baked))))
+    STATE.get_or_init(|| RwLock::new(Arc::new(read_file(path()).unwrap_or_else(baked))))
 }
 
 /// Snapshot of the current config. Bind it to a local before borrowing fields.
@@ -262,7 +324,7 @@ pub fn force_reload() {
     // On an unparseable file (mid-edit save, syntax slip) keep the previous config —
     // never silently swap in the baked default.
     let _g = MUT_LOCK.lock().unwrap();
-    if let Some(cfg) = read_file() {
+    if let Some(cfg) = read_file(path()) {
         *state().write().unwrap() = Arc::new(cfg);
         REV.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -404,8 +466,12 @@ pub fn add_server(fields: &serde_json::Value) -> Result<Server, String> {
     }
     mutate(|cfg| {
         let taken: Vec<String> = cfg.servers.iter().map(|s| s.id.clone()).collect();
-        let trimmed_field =
-            |k: &str| fields[k].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let trimmed_field = |k: &str| {
+            fields[k]
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
         let s = Server {
             id: unique(&slug(&name), &taken),
             name,
@@ -469,4 +535,170 @@ pub fn remove_server(sid: &str) -> Result<(), String> {
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos();
+            let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "lab-terminus-config-test-{}-{nonce}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).expect("test directory should be created");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn contains_sensitive_field(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+                matches!(
+                    key.as_str(),
+                    "account" | "address" | "host" | "hostLocal" | "passwd" | "password" | "user"
+                ) || contains_sensitive_field(value)
+            }),
+            serde_json::Value::Array(values) => values.iter().any(contains_sensitive_field),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn tracked_default_is_valid_and_sanitized() {
+        let config = parse_config(DEFAULT_CONFIG).expect("tracked default should parse");
+        let value: serde_json::Value =
+            serde_json::from_str(DEFAULT_CONFIG).expect("tracked default should be valid JSON");
+
+        assert!(config.servers.is_empty());
+        assert!(config.nas.is_none());
+        assert!(config.key.is_none());
+        assert!(!contains_sensitive_field(&value));
+    }
+
+    #[test]
+    fn missing_target_is_seeded_from_tracked_default() {
+        let directory = TestDir::new();
+        let target = directory.path().join("nested").join("config.json");
+
+        assert!(seed_default(&target).expect("missing target should be seeded"));
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("seeded target should be readable"),
+            DEFAULT_CONFIG
+        );
+        parse_config(
+            &std::fs::read_to_string(target).expect("seeded target should remain readable"),
+        )
+        .expect("seeded target should parse");
+    }
+
+    #[test]
+    fn existing_invalid_target_is_not_replaced() {
+        let directory = TestDir::new();
+        let target = directory.path().join("config.json");
+        let existing = "{ existing config being edited";
+        std::fs::write(&target, existing).expect("existing target should be written");
+
+        assert!(!seed_default(&target).expect("existing target should be preserved"));
+        assert_eq!(
+            std::fs::read_to_string(target).expect("existing target should be readable"),
+            existing
+        );
+    }
+
+    #[test]
+    fn bom_parsing_applies_folder_normalization() {
+        let text = concat!(
+            "\u{feff}",
+            r#"{"servers":[{"id":"demo","name":"Demo","kind":"ssh","group":"research-team"}],"folders":[]}"#
+        );
+
+        let config = parse_config(text).expect("BOM-prefixed config should parse");
+
+        assert_eq!(config.folders.len(), DEFAULT_FOLDERS.len() + 1);
+        assert!(config
+            .folders
+            .iter()
+            .any(|folder| folder.key == "research-team" && folder.title == "Research-Team"));
+    }
+
+    #[test]
+    fn path_selection_preserves_explicit_dev_and_user_precedence() {
+        let directory = TestDir::new();
+        let current_dir = directory.path().join("workspace");
+        std::fs::create_dir(&current_dir).expect("workspace should be created");
+        let dev_config = current_dir.join("config.local.json");
+        std::fs::write(&dev_config, "{}").expect("development config should be written");
+        let explicit = directory.path().join("override.json");
+        let user = directory.path().join("user").join("config.json");
+
+        let selected = select_path(Some(explicit.as_os_str()), &current_dir, None, user.clone());
+        assert_eq!(selected.path, explicit);
+        assert!(!selected.seed_default);
+
+        let selected = select_path(None, &current_dir, None, user.clone());
+        assert_eq!(selected.path, dev_config);
+        assert!(!selected.seed_default);
+
+        let empty_dir = directory.path().join("empty").join("current");
+        std::fs::create_dir_all(&empty_dir).expect("empty directory should be created");
+        let selected = select_path(None, &empty_dir, None, user.clone());
+        assert_eq!(selected.path, user);
+        assert!(selected.seed_default);
+    }
+
+    #[test]
+    fn executable_ancestor_development_config_is_discovered() {
+        let directory = TestDir::new();
+        let repository = directory.path().join("repository");
+        let config_path = repository.join("config.local.json");
+        std::fs::create_dir(&repository).expect("repository directory should be created");
+        std::fs::write(&config_path, "{}").expect("development config should be written");
+        let executable = repository.join("target").join("debug").join("lab-terminus");
+        let unrelated_current_dir = directory.path().join("run").join("current");
+        std::fs::create_dir_all(&unrelated_current_dir)
+            .expect("unrelated current directory should be created");
+
+        assert_eq!(
+            dev_path(&unrelated_current_dir, Some(&executable)),
+            Some(config_path)
+        );
+    }
+
+    #[test]
+    fn per_user_path_prefers_appdata_then_home() {
+        let appdata = Path::new("appdata-root");
+        let home = Path::new("home-root");
+
+        assert_eq!(
+            appdata_path(Some(appdata.as_os_str()), Some(home.as_os_str())),
+            appdata.join("LabTerminus").join("config.json")
+        );
+        assert_eq!(
+            appdata_path(None, Some(home.as_os_str())),
+            home.join(".config").join("LabTerminus").join("config.json")
+        );
+    }
 }

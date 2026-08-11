@@ -29,7 +29,10 @@ fn base_urls() -> Result<Vec<String>, String> {
     let nas = cfg.nas.as_ref().ok_or("no nas config")?;
     let mut urls = vec![format!("{}://{}:{}/webapi", nas.scheme, nas.host, nas.port)];
     if let Some(local_host) = &nas.host_local {
-        urls.push(format!("{}://{}:{}/webapi", nas.scheme, local_host, nas.port));
+        urls.push(format!(
+            "{}://{}:{}/webapi",
+            nas.scheme, local_host, nas.port
+        ));
     }
     Ok(urls)
 }
@@ -178,8 +181,7 @@ pub async fn upload(
     overwrite: bool,
 ) -> Result<(), String> {
     let (base, sid) = current_session().await?;
-    let part =
-        reqwest::multipart::Part::stream_with_length(body, len).file_name(name.to_string());
+    let part = reqwest::multipart::Part::stream_with_length(body, len).file_name(name.to_string());
     let form = reqwest::multipart::Form::new()
         .text("api", "SYNO.FileStation.Upload")
         .text("version", "2")
@@ -225,7 +227,9 @@ pub async fn status(s: &Server) -> serde_json::Value {
                     let total = coerce_i64(&vs["totalspace"]);
                     if total > 0 {
                         let free = coerce_i64(&vs["freespace"]);
-                        disks.push(serde_json::json!({"m": "volume", "size": total, "used": total - free}));
+                        disks.push(
+                            serde_json::json!({"m": "volume", "size": total, "used": total - free}),
+                        );
                         break;
                     }
                 }
@@ -361,7 +365,10 @@ pub async fn ls_dir(_s: &Server, path: Option<&str>) -> serde_json::Value {
             "SYNO.FileStation.List",
             "list",
             "2",
-            &[("folder_path", p.as_str()), ("additional", "[\"size\",\"time\",\"type\"]")],
+            &[
+                ("folder_path", p.as_str()),
+                ("additional", "[\"size\",\"time\",\"type\"]"),
+            ],
         )
         .await
         .map(|d| {
@@ -388,6 +395,8 @@ pub async fn ls_dir(_s: &Server, path: Option<&str>) -> serde_json::Value {
         Ok(entries) => {
             serde_json::json!({"path": shown, "parent": parent_of(&shown), "entries": entries})
         }
-        Err(e) => serde_json::json!({"path": shown, "parent": parent_of(&shown), "entries": [], "error": e}),
+        Err(e) => {
+            serde_json::json!({"path": shown, "parent": parent_of(&shown), "entries": [], "error": e})
+        }
     }
 }

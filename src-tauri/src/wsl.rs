@@ -100,7 +100,9 @@ pub async fn ls_dir(_s: &Server, path: Option<&str>) -> serde_json::Value {
             }
             serde_json::json!({"path": p, "parent": ssh::parent_of(&p), "entries": entries})
         }
-        Err(e) => serde_json::json!({"path": p, "parent": ssh::parent_of(&p), "entries": [], "error": e}),
+        Err(e) => {
+            serde_json::json!({"path": p, "parent": ssh::parent_of(&p), "entries": [], "error": e})
+        }
     }
 }
 
