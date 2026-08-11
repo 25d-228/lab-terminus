@@ -9,6 +9,7 @@ mod nas;
 mod pty;
 mod server;
 mod ssh;
+mod status;
 mod transfers;
 mod wsl;
 
