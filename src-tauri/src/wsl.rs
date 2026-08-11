@@ -1,6 +1,7 @@
 //! WSL transport — runs commands inside the WSL distro via wsl.exe (ported from the prototype).
 use crate::config::{self, Server};
 use crate::ssh;
+use crate::status::HostStatus;
 
 fn distro() -> String {
     config::get()
@@ -50,7 +51,7 @@ async fn run_status(cmd: &str) -> Result<(i32, String, String), String> {
     ))
 }
 
-pub async fn status(s: &Server) -> serde_json::Value {
+pub async fn status(s: &Server) -> HostStatus {
     match run(ssh::GATHER).await {
         Ok(out) => ssh::online(s, &out),
         Err(e) => ssh::offline(s, &e),

@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::config::{self, Server};
 use crate::ssh::{es, offline, parent_of};
+use crate::status::{DiskStatus, HostStatus};
 
 // (base url, sid) of the DSM endpoint that actually answered — probed at login.
 static SESSION: Mutex<Option<(String, String)>> = Mutex::new(None);
@@ -210,38 +211,46 @@ pub async fn upload(
     }
 }
 
-pub async fn status(s: &Server) -> serde_json::Value {
-    match api_call(
+fn status_from_result(s: &Server, result: Result<serde_json::Value, String>) -> HostStatus {
+    match result {
+        Ok(data) => {
+            let mut disks = Vec::new();
+            if let Some(shares) = data["shares"].as_array() {
+                for sh in shares {
+                    let volume = &sh["additional"]["volume_status"];
+                    let total = coerce_i64(&volume["totalspace"]);
+                    if total > 0 {
+                        let free = coerce_i64(&volume["freespace"]);
+                        disks.push(DiskStatus {
+                            m: "volume".to_string(),
+                            size: total,
+                            used: total - free,
+                        });
+                        break;
+                    }
+                }
+            }
+            HostStatus {
+                id: s.id.clone(),
+                online: true,
+                host: "nas".to_string(),
+                disks,
+                ..HostStatus::default()
+            }
+        }
+        Err(error) => offline(s, &error),
+    }
+}
+
+pub async fn status(s: &Server) -> HostStatus {
+    let result = api_call(
         "SYNO.FileStation.List",
         "list_share",
         "2",
         &[("additional", "[\"volume_status\"]")],
     )
-    .await
-    {
-        Ok(data) => {
-            let mut disks = Vec::new();
-            if let Some(shares) = data["shares"].as_array() {
-                for sh in shares {
-                    let vs = &sh["additional"]["volume_status"];
-                    let total = coerce_i64(&vs["totalspace"]);
-                    if total > 0 {
-                        let free = coerce_i64(&vs["freespace"]);
-                        disks.push(
-                            serde_json::json!({"m": "volume", "size": total, "used": total - free}),
-                        );
-                        break;
-                    }
-                }
-            }
-            serde_json::json!({
-                "id": s.id, "online": true, "error": null, "host": "nas", "up": "",
-                "load": [0,0,0], "ncpu": 0, "mem": {"total":0,"used":0},
-                "disks": disks, "gpus": [], "procs": []
-            })
-        }
-        Err(e) => offline(s, &e),
-    }
+    .await;
+    status_from_result(s, result)
 }
 
 fn split_parent(path: &str) -> Result<(&str, &str), String> {
@@ -398,5 +407,58 @@ pub async fn ls_dir(_s: &Server, path: Option<&str>) -> serde_json::Value {
         Err(e) => {
             serde_json::json!({"path": shown, "parent": parent_of(&shown), "entries": [], "error": e})
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server() -> Server {
+        Server {
+            id: "nas-1".to_string(),
+            name: "Storage".to_string(),
+            kind: "nas".to_string(),
+            host: None,
+            port: None,
+            user: None,
+            gpu_label: None,
+            home: None,
+            group: None,
+            custom: None,
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn usable_dsm_volume_data_produces_one_typed_disk() {
+        let status = status_from_result(
+            &server(),
+            Ok(serde_json::json!({
+                "shares": [
+                    {"additional": {"volume_status": {"totalspace": "1000", "freespace": 250}}},
+                    {"additional": {"volume_status": {"totalspace": 2000, "freespace": 500}}}
+                ]
+            })),
+        );
+
+        assert!(status.online);
+        assert_eq!(status.error, None);
+        assert_eq!(status.host, "nas");
+        assert_eq!(
+            status.disks,
+            vec![DiskStatus {
+                m: "volume".to_string(),
+                size: 1000,
+                used: 750,
+            }]
+        );
+    }
+
+    #[test]
+    fn dsm_api_error_produces_complete_offline_status() {
+        let status = status_from_result(&server(), Err("DSM unavailable".to_string()));
+
+        assert_eq!(status, offline(&server(), "DSM unavailable"));
     }
 }

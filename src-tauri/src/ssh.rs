@@ -11,6 +11,7 @@ use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey};
 use russh::ChannelMsg;
 
 use crate::config::{self, Server};
+use crate::status::{DiskStatus, GpuProcessStatus, GpuStatus, HostStatus, MemoryStatus};
 
 // ---- one round trip per host gathers everything the Monitor needs ----
 pub(crate) const GATHER: &str = r#"echo '@@HOST'; hostname
@@ -183,7 +184,7 @@ fn parse_f64_or_zero(s: &str) -> f64 {
     s.parse::<f64>().unwrap_or(0.0)
 }
 
-fn parse_disks(lines: &[String]) -> Vec<serde_json::Value> {
+fn parse_disks(lines: &[String]) -> Vec<DiskStatus> {
     let mut disks = Vec::new();
     for line in lines {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -191,13 +192,17 @@ fn parse_disks(lines: &[String]) -> Vec<serde_json::Value> {
             continue;
         }
         if let (Ok(size), Ok(used)) = (fields[1].parse::<i64>(), fields[2].parse::<i64>()) {
-            disks.push(serde_json::json!({"m": fields[0], "size": size, "used": used}));
+            disks.push(DiskStatus {
+                m: fields[0].to_string(),
+                size,
+                used,
+            });
         }
     }
     disks
 }
 
-fn parse_gpus(lines: &[String]) -> (Vec<serde_json::Value>, HashMap<String, i64>) {
+fn parse_gpus(lines: &[String]) -> (Vec<GpuStatus>, HashMap<String, i64>) {
     let mut gpus = Vec::new();
     let mut uuid_to_index: HashMap<String, i64> = HashMap::new();
     for line in lines {
@@ -207,12 +212,16 @@ fn parse_gpus(lines: &[String]) -> (Vec<serde_json::Value>, HashMap<String, i64>
         }
         if let Ok(index) = columns[0].parse::<i64>() {
             uuid_to_index.insert(columns[1].clone(), index);
-            gpus.push(serde_json::json!({
-                "index": index, "name": columns[2],
-                "mu": parse_f64_or_zero(&columns[3]) as i64, "mt": parse_f64_or_zero(&columns[4]) as i64,
-                "util": parse_f64_or_zero(&columns[5]) as i64, "temp": parse_f64_or_zero(&columns[6]) as i64,
-                "pow": parse_f64_or_zero(&columns[7]), "plim": parse_f64_or_zero(&columns[8]) as i64
-            }));
+            gpus.push(GpuStatus {
+                index,
+                name: columns[2].clone(),
+                mu: parse_f64_or_zero(&columns[3]) as i64,
+                mt: parse_f64_or_zero(&columns[4]) as i64,
+                util: parse_f64_or_zero(&columns[5]) as i64,
+                temp: parse_f64_or_zero(&columns[6]) as i64,
+                pow: parse_f64_or_zero(&columns[7]),
+                plim: parse_f64_or_zero(&columns[8]) as i64,
+            });
         }
     }
     (gpus, uuid_to_index)
@@ -265,7 +274,7 @@ fn parse_apps(lines: &[String]) -> Vec<(i64, String, i64)> {
     apps
 }
 
-pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
+pub(crate) fn parse_gather(text: &str) -> HostStatus {
     let mut sec: HashMap<String, Vec<String>> = HashMap::new();
     let mut cur: Option<String> = None;
     for line in text.lines() {
@@ -286,16 +295,16 @@ pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
         .parse::<i64>()
         .map(fmt_dur)
         .unwrap_or_default();
-    let load: Vec<f64> = {
+    let load = {
         let parts: Vec<f64> = first("LOAD")
             .split_whitespace()
             .take(3)
             .filter_map(|x| x.parse().ok())
             .collect();
         if parts.len() == 3 {
-            parts
+            [parts[0], parts[1], parts[2]]
         } else {
-            vec![0.0, 0.0, 0.0]
+            [0.0, 0.0, 0.0]
         }
     };
     let ncpu = first("NCPU").trim().parse::<i64>().unwrap_or(0);
@@ -305,53 +314,66 @@ pub(crate) fn parse_gather(text: &str) -> serde_json::Value {
             .filter_map(|x| x.parse().ok())
             .collect();
         if p.len() == 2 {
-            serde_json::json!({"total": p[0], "used": p[1]})
+            MemoryStatus {
+                total: p[0],
+                used: p[1],
+            }
         } else {
-            serde_json::json!({"total": 0, "used": 0})
+            MemoryStatus::default()
         }
     };
     let disks = parse_disks(&get("DF"));
     let (gpus, uuid_to_index) = parse_gpus(&get("GPU"));
     let apps = parse_apps(&get("APPS"));
     let ps_by_pid = parse_ps_map(&get("PS"));
-    let procs: Vec<serde_json::Value> = apps
+    let procs = apps
         .iter()
         .map(|(pid, uuid, mem)| {
             let (user, etime, cmd) = ps_by_pid
                 .get(pid)
                 .cloned()
                 .unwrap_or_else(|| ("?".into(), String::new(), String::new()));
-            serde_json::json!({
-                "pid": pid, "gpu": uuid_to_index.get(uuid).copied().unwrap_or(0),
-                "mem": mem, "user": user, "etime": etime, "cmd": cmd
-            })
+            GpuProcessStatus {
+                pid: *pid,
+                gpu: uuid_to_index.get(uuid).copied().unwrap_or(0),
+                mem: *mem,
+                user,
+                etime,
+                cmd,
+            }
         })
         .collect();
 
-    serde_json::json!({
-        "host": host, "up": up, "ncpu": ncpu, "load": load,
-        "mem": mem, "disks": disks, "gpus": gpus, "procs": procs
-    })
+    HostStatus {
+        host,
+        up,
+        load,
+        ncpu,
+        mem,
+        disks,
+        gpus,
+        procs,
+        ..HostStatus::default()
+    }
 }
 
-pub(crate) fn offline(s: &Server, err: &str) -> serde_json::Value {
-    serde_json::json!({
-        "id": s.id, "online": false, "error": err, "host": "", "up": "",
-        "load": [0,0,0], "ncpu": 0, "mem": {"total":0,"used":0},
-        "disks": [], "gpus": [], "procs": []
-    })
+pub(crate) fn offline(s: &Server, err: &str) -> HostStatus {
+    HostStatus {
+        id: s.id.clone(),
+        error: Some(err.to_string()),
+        ..HostStatus::default()
+    }
 }
 
-pub(crate) fn online(s: &Server, out: &str) -> serde_json::Value {
-    let mut g = parse_gather(out);
-    g["id"] = s.id.clone().into();
-    g["online"] = true.into();
-    g["error"] = serde_json::Value::Null;
-    g
+pub(crate) fn online(s: &Server, out: &str) -> HostStatus {
+    let mut status = parse_gather(out);
+    status.id = s.id.clone();
+    status.online = true;
+    status
 }
 
 // ---------------------------------------------------------------- status / fleet
-pub async fn status_for(s: Server) -> serde_json::Value {
+pub async fn status_for(s: Server) -> HostStatus {
     match s.kind.as_str() {
         "wsl" => return crate::wsl::status(&s).await,
         "nas" => return crate::nas::status(&s).await,
@@ -369,7 +391,7 @@ pub async fn status_for(s: Server) -> serde_json::Value {
     }
 }
 
-static FLEET_CACHE: Mutex<Option<(Instant, Vec<serde_json::Value>)>> = Mutex::new(None);
+static FLEET_CACHE: Mutex<Option<(Instant, Vec<Option<HostStatus>>)>> = Mutex::new(None);
 // single-flight guard: only ONE fleet scan may run at a time. Overlapping polls return
 // the cached snapshot instead of each launching a fresh set of SSH connects — that pile-up
 // (slowest host gates a ~16s scan, frontend polls every 5s) is what stormed the sshds and
@@ -378,23 +400,36 @@ static FLEET_REFRESHING: AtomicBool = AtomicBool::new(false);
 const FLEET_TTL: Duration = Duration::from_secs(3);
 
 // One concurrent scan of every configured host (reachable + unreachable).
-async fn fleet_scan() -> Vec<serde_json::Value> {
+fn configured_order(
+    server_count: usize,
+    completed: Vec<(usize, HostStatus)>,
+) -> Vec<Option<HostStatus>> {
+    let mut ordered = vec![None; server_count];
+    for (index, status) in completed {
+        if let Some(slot) = ordered.get_mut(index) {
+            *slot = Some(status);
+        }
+    }
+    ordered
+}
+
+async fn fleet_scan() -> Vec<Option<HostStatus>> {
     let servers = config::get().servers.clone();
     let n = servers.len();
     let mut set = tokio::task::JoinSet::new();
     for (i, s) in servers.into_iter().enumerate() {
         set.spawn(async move { (i, status_for(s).await) });
     }
-    let mut out: Vec<serde_json::Value> = vec![serde_json::Value::Null; n];
+    let mut completed = Vec::with_capacity(n);
     while let Some(res) = set.join_next().await {
-        if let Ok((i, v)) = res {
-            out[i] = v;
+        if let Ok(status) = res {
+            completed.push(status);
         }
     }
-    out
+    configured_order(n, completed)
 }
 
-pub async fn fleet() -> Vec<serde_json::Value> {
+pub async fn fleet() -> Vec<Option<HostStatus>> {
     let snapshot = FLEET_CACHE.lock().ok().and_then(|g| g.clone());
     if let Some((t, data)) = &snapshot {
         if t.elapsed() < FLEET_TTL {
@@ -580,4 +615,184 @@ pub async fn exec_cmd(s: &Server, cwd: &str, cmd: &str) -> Result<(String, Strin
     let handle = connect(s).await?;
     let out = exec_raw(&handle, &full).await?;
     Ok(split_cwd(&out, cwd))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(id: &str) -> Server {
+        Server {
+            id: id.to_string(),
+            name: id.to_string(),
+            kind: "ssh".to_string(),
+            host: None,
+            port: None,
+            user: None,
+            gpu_label: None,
+            home: None,
+            group: None,
+            custom: None,
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn representative_gather_output_maps_every_metric() {
+        let gathered = parse_gather(
+            r#"@@HOST
+compute-01
+@@UP
+90061
+@@LOAD
+1.25 0.75 0.50 2/100 1234
+@@NCPU
+16
+@@MEM
+68719476736 17179869184
+@@DF
+/ 1000000 250000
+/data 4000000 1000000
+@@GPU
+2, GPU-abc, Example GPU, 1024, 24576, 75, 61, 123.5, 300
+@@APPS
+4321, GPU-abc, 2048
+@@PS
+4321 alice 3661 python train.py --epochs 2
+@@END
+"#,
+        );
+
+        assert_eq!(gathered.host, "compute-01");
+        assert_eq!(gathered.up, "1d 1h");
+        assert_eq!(gathered.load, [1.25, 0.75, 0.5]);
+        assert_eq!(gathered.ncpu, 16);
+        assert_eq!(
+            gathered.mem,
+            MemoryStatus {
+                total: 68_719_476_736,
+                used: 17_179_869_184,
+            }
+        );
+        assert_eq!(
+            gathered.disks,
+            vec![
+                DiskStatus {
+                    m: "/".to_string(),
+                    size: 1_000_000,
+                    used: 250_000,
+                },
+                DiskStatus {
+                    m: "/data".to_string(),
+                    size: 4_000_000,
+                    used: 1_000_000,
+                },
+            ]
+        );
+        assert_eq!(
+            gathered.gpus,
+            vec![GpuStatus {
+                index: 2,
+                name: "Example GPU".to_string(),
+                mu: 1024,
+                mt: 24_576,
+                util: 75,
+                temp: 61,
+                pow: 123.5,
+                plim: 300,
+            }]
+        );
+        assert_eq!(
+            gathered.procs,
+            vec![GpuProcessStatus {
+                pid: 4321,
+                gpu: 2,
+                mem: 2048,
+                user: "alice".to_string(),
+                etime: "1h 1m".to_string(),
+                cmd: "python train.py --epochs 2".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn malformed_or_missing_gather_sections_keep_empty_defaults() {
+        let gathered = parse_gather(
+            r#"@@UP
+not-a-duration
+@@LOAD
+1.0 invalid 3.0
+@@NCPU
+many
+@@MEM
+100 invalid
+@@DF
+/ invalid 1
+missing-fields 10
+@@GPU
+invalid, GPU-abc, Example GPU, 1, 2, 3, 4, 5, 6
+@@APPS
+invalid, GPU-abc, 100
+@@PS
+invalid alice 20 command
+@@END
+"#,
+        );
+
+        assert_eq!(gathered.host, "");
+        assert_eq!(gathered.up, "");
+        assert_eq!(gathered.load, [0.0, 0.0, 0.0]);
+        assert_eq!(gathered.ncpu, 0);
+        assert_eq!(gathered.mem, MemoryStatus::default());
+        assert!(gathered.disks.is_empty());
+        assert!(gathered.gpus.is_empty());
+        assert!(gathered.procs.is_empty());
+    }
+
+    #[test]
+    fn online_and_offline_serialize_the_complete_contract() {
+        let server = server("host-1");
+
+        assert_eq!(
+            serde_json::to_value(online(&server, "@@HOST\nnode-1\n@@END\n"))
+                .expect("online status should serialize"),
+            serde_json::json!({
+                "id": "host-1", "online": true, "error": null, "host": "node-1", "up": "",
+                "load": [0.0, 0.0, 0.0], "ncpu": 0, "mem": {"total": 0, "used": 0},
+                "disks": [], "gpus": [], "procs": []
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(offline(&server, "connection failed"))
+                .expect("offline status should serialize"),
+            serde_json::json!({
+                "id": "host-1", "online": false, "error": "connection failed", "host": "", "up": "",
+                "load": [0.0, 0.0, 0.0], "ncpu": 0, "mem": {"total": 0, "used": 0},
+                "disks": [], "gpus": [], "procs": []
+            })
+        );
+    }
+
+    #[test]
+    fn fleet_results_restore_configured_order() {
+        let completed = vec![
+            (2, online(&server("third"), "")),
+            (0, online(&server("first"), "")),
+            (1, online(&server("second"), "")),
+        ];
+
+        let ordered = configured_order(3, completed);
+        let ids: Vec<&str> = ordered
+            .iter()
+            .map(|status| {
+                status
+                    .as_ref()
+                    .expect("status should be present")
+                    .id
+                    .as_str()
+            })
+            .collect();
+
+        assert_eq!(ids, ["first", "second", "third"]);
+    }
 }

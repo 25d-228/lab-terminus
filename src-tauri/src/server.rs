@@ -8,8 +8,9 @@ use axum::{
     Json, Router,
 };
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use crate::status::HostStatus;
 use crate::{config, ssh};
 
 #[derive(RustEmbed)]
@@ -111,8 +112,17 @@ async fn folder_del(Path(key): Path<String>) -> Response {
     }
 }
 
+#[derive(Serialize)]
+struct FleetResponse {
+    servers: Vec<Option<HostStatus>>,
+    rev: u64,
+}
+
 async fn fleet() -> impl IntoResponse {
-    Json(serde_json::json!({ "servers": ssh::fleet().await, "rev": config::rev() }))
+    Json(FleetResponse {
+        servers: ssh::fleet().await,
+        rev: config::rev(),
+    })
 }
 
 async fn host_status(Path(id): Path<String>) -> Response {
