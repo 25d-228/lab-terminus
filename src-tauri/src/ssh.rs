@@ -11,7 +11,10 @@ use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey};
 use russh::ChannelMsg;
 
 use crate::config::{self, Server};
-use crate::status::{DiskStatus, GpuProcessStatus, GpuStatus, HostStatus, MemoryStatus};
+use crate::status::{
+    DiskStatus, GpuProcessStatus, GpuStatus, HostStatus, MemoryStatus, NetworkStatus,
+    TopProcessStatus,
+};
 
 // ---- one round trip per host gathers everything the Monitor needs ----
 pub(crate) const GATHER: &str = r#"echo '@@HOST'; hostname
@@ -20,6 +23,8 @@ echo '@@LOAD'; cat /proc/loadavg
 echo '@@NCPU'; nproc
 echo '@@MEM'; free -b | awk 'NR==2{print $2, $3}'
 echo '@@DF'; df -B1 -x tmpfs -x devtmpfs -x overlay -x squashfs --output=target,size,used 2>/dev/null | tail -n +2
+echo '@@NET'; cat /proc/net/dev 2>/dev/null
+echo '@@TOP'; LC_ALL=C ps ww -eo pid=,user:32=,pcpu=,pmem=,rss=,etimes=,args= --sort=-pcpu,-rss 2>/dev/null | head -n 20
 echo '@@GPU'; nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw,power.limit --format=csv,noheader,nounits 2>/dev/null
 echo '@@APPS'; nvidia-smi --query-compute-apps=pid,gpu_uuid,used_memory --format=csv,noheader,nounits 2>/dev/null
 PIDS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' | sort -u | paste -sd, -)
@@ -202,6 +207,108 @@ fn parse_disks(lines: &[String]) -> Vec<DiskStatus> {
     disks
 }
 
+fn parse_network(lines: &[String], uptime_seconds: Option<u64>) -> NetworkStatus {
+    let Some(uptime_seconds) = uptime_seconds else {
+        return NetworkStatus::default();
+    };
+    let mut rx_bytes = 0_u64;
+    let mut tx_bytes = 0_u64;
+    let mut seen = false;
+    for line in lines {
+        let Some((interface, counters)) = line.split_once(':') else {
+            continue;
+        };
+        if interface.trim() == "lo" {
+            continue;
+        }
+        let fields: Vec<&str> = counters.split_whitespace().collect();
+        if fields.len() < 9 {
+            return NetworkStatus::default();
+        }
+        let (Ok(rx), Ok(tx)) = (fields[0].parse::<u64>(), fields[8].parse::<u64>()) else {
+            return NetworkStatus::default();
+        };
+        let Some(next_rx) = rx_bytes.checked_add(rx) else {
+            return NetworkStatus::default();
+        };
+        let Some(next_tx) = tx_bytes.checked_add(tx) else {
+            return NetworkStatus::default();
+        };
+        rx_bytes = next_rx;
+        tx_bytes = next_tx;
+        seen = true;
+    }
+    NetworkStatus {
+        available: seen,
+        rx_bytes,
+        tx_bytes,
+        uptime_seconds,
+    }
+}
+
+fn parse_top_processes(lines: &[String]) -> Vec<TopProcessStatus> {
+    let mut processes = Vec::new();
+    for line in lines {
+        let Some((pid, rest)) = next_token(line) else {
+            continue;
+        };
+        let Some((user, rest)) = next_token(rest) else {
+            continue;
+        };
+        let Some((cpu_pct, rest)) = next_token(rest) else {
+            continue;
+        };
+        let Some((memory_pct, rest)) = next_token(rest) else {
+            continue;
+        };
+        let Some((resident_kib, rest)) = next_token(rest) else {
+            continue;
+        };
+        let Some((elapsed_seconds, command)) = next_token(rest) else {
+            continue;
+        };
+        let (Ok(pid), Ok(cpu_pct), Ok(memory_pct), Ok(resident_kib), Ok(elapsed_seconds)) = (
+            pid.parse::<i64>(),
+            cpu_pct.parse::<f64>(),
+            memory_pct.parse::<f64>(),
+            resident_kib.parse::<u64>(),
+            elapsed_seconds.parse::<i64>(),
+        ) else {
+            continue;
+        };
+        let Some(resident_bytes) = resident_kib.checked_mul(1024) else {
+            continue;
+        };
+        let command = command.trim_start();
+        if pid <= 0
+            || !cpu_pct.is_finite()
+            || cpu_pct < 0.0
+            || !memory_pct.is_finite()
+            || memory_pct < 0.0
+            || elapsed_seconds < 0
+            || command.is_empty()
+        {
+            continue;
+        }
+        processes.push(TopProcessStatus {
+            pid,
+            user: user.to_string(),
+            cpu_pct,
+            memory_pct,
+            resident_bytes,
+            elapsed: fmt_dur(elapsed_seconds),
+            command: command.to_string(),
+        });
+    }
+    processes.sort_by(|a, b| {
+        b.cpu_pct
+            .total_cmp(&a.cpu_pct)
+            .then_with(|| b.resident_bytes.cmp(&a.resident_bytes))
+    });
+    processes.truncate(20);
+    processes
+}
+
 fn parse_gpus(lines: &[String]) -> (Vec<GpuStatus>, HashMap<String, i64>) {
     let mut gpus = Vec::new();
     let mut uuid_to_index: HashMap<String, i64> = HashMap::new();
@@ -290,9 +397,9 @@ pub(crate) fn parse_gather(text: &str) -> HostStatus {
     let first = |k: &str| get(k).first().cloned().unwrap_or_default();
 
     let host = first("HOST").trim().to_string();
-    let up = first("UP")
-        .trim()
-        .parse::<i64>()
+    let uptime_seconds = first("UP").trim().parse::<u64>().ok();
+    let up = uptime_seconds
+        .and_then(|seconds| i64::try_from(seconds).ok())
         .map(fmt_dur)
         .unwrap_or_default();
     let load = {
@@ -323,6 +430,8 @@ pub(crate) fn parse_gather(text: &str) -> HostStatus {
         }
     };
     let disks = parse_disks(&get("DF"));
+    let network = parse_network(&get("NET"), uptime_seconds);
+    let top_procs = parse_top_processes(&get("TOP"));
     let (gpus, uuid_to_index) = parse_gpus(&get("GPU"));
     let apps = parse_apps(&get("APPS"));
     let ps_by_pid = parse_ps_map(&get("PS"));
@@ -353,6 +462,8 @@ pub(crate) fn parse_gather(text: &str) -> HostStatus {
         disks,
         gpus,
         procs,
+        network,
+        top_procs,
         ..HostStatus::default()
     }
 }
@@ -653,6 +764,15 @@ compute-01
 @@DF
 / 1000000 250000
 /data 4000000 1000000
+@@NET
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 9999 1 0 0 0 0 0 0 9999 1 0 0 0 0 0 0
+  eth0: 1000 1 0 0 0 0 0 0 2000 1 0 0 0 0 0 0
+ wlan0: 3000 1 0 0 0 0 0 0 4000 1 0 0 0 0 0 0
+@@TOP
+1002 bob 8.5 1.5 4096 65 python worker.py --queue long jobs
+1001 alice 8.5 2.0 8192 3661 cargo test --workspace
 @@GPU
 2, GPU-abc, Example GPU, 1024, 24576, 75, 61, 123.5, 300
 @@APPS
@@ -667,6 +787,38 @@ compute-01
         assert_eq!(gathered.up, "1d 1h");
         assert_eq!(gathered.load, [1.25, 0.75, 0.5]);
         assert_eq!(gathered.ncpu, 16);
+        assert_eq!(
+            gathered.network,
+            NetworkStatus {
+                available: true,
+                rx_bytes: 4_000,
+                tx_bytes: 6_000,
+                uptime_seconds: 90_061,
+            }
+        );
+        assert_eq!(
+            gathered.top_procs,
+            vec![
+                TopProcessStatus {
+                    pid: 1001,
+                    user: "alice".to_string(),
+                    cpu_pct: 8.5,
+                    memory_pct: 2.0,
+                    resident_bytes: 8_388_608,
+                    elapsed: "1h 1m".to_string(),
+                    command: "cargo test --workspace".to_string(),
+                },
+                TopProcessStatus {
+                    pid: 1002,
+                    user: "bob".to_string(),
+                    cpu_pct: 8.5,
+                    memory_pct: 1.5,
+                    resident_bytes: 4_194_304,
+                    elapsed: "1m".to_string(),
+                    command: "python worker.py --queue long jobs".to_string(),
+                },
+            ]
+        );
         assert_eq!(
             gathered.mem,
             MemoryStatus {
@@ -729,6 +881,14 @@ many
 @@DF
 / invalid 1
 missing-fields 10
+@@NET
+eth0: invalid 1 0 0 0 0 0 0 200 1 0 0 0 0 0 0
+@@TOP
+10 alice NaN 1.0 100 20 bad-cpu
+11 bob 2.0 invalid 100 20 bad-memory
+12 carol 2.0 1.0 invalid 20 bad-rss
+13 dave 2.0 1.0 100 invalid bad-elapsed
+14 erin 2.0 1.0 100 20
 @@GPU
 invalid, GPU-abc, Example GPU, 1, 2, 3, 4, 5, 6
 @@APPS
@@ -747,6 +907,56 @@ invalid alice 20 command
         assert!(gathered.disks.is_empty());
         assert!(gathered.gpus.is_empty());
         assert!(gathered.procs.is_empty());
+        assert_eq!(gathered.network, NetworkStatus::default());
+        assert!(gathered.top_procs.is_empty());
+    }
+
+    #[test]
+    fn partial_new_sections_keep_valid_processes_and_reject_incomplete_network_totals() {
+        let gathered = parse_gather(
+            r#"@@UP
+120
+@@NET
+lo: 10 0 0 0 0 0 0 0 20 0 0 0 0 0 0 0
+eth0: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0
+wlan0: malformed
+@@TOP
+bad row
+21 alice 12.5 3.0 2048 120 command with spaces
+22 bob inf 4.0 4096 60 malformed cpu
+@@END
+"#,
+        );
+
+        assert_eq!(gathered.network, NetworkStatus::default());
+        assert_eq!(
+            gathered.top_procs,
+            vec![TopProcessStatus {
+                pid: 21,
+                user: "alice".to_string(),
+                cpu_pct: 12.5,
+                memory_pct: 3.0,
+                resident_bytes: 2_097_152,
+                elapsed: "2m".to_string(),
+                command: "command with spaces".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn top_processes_are_sorted_and_limited_to_twenty_rows() {
+        let lines: Vec<String> = (1..=25)
+            .map(|pid| format!("{pid} user {} 1.0 {pid} 60 command {pid}", pid % 4))
+            .collect();
+
+        let processes = parse_top_processes(&lines);
+
+        assert_eq!(processes.len(), 20);
+        assert!(processes
+            .windows(2)
+            .all(|pair| pair[0].cpu_pct > pair[1].cpu_pct
+                || (pair[0].cpu_pct == pair[1].cpu_pct
+                    && pair[0].resident_bytes >= pair[1].resident_bytes)));
     }
 
     #[test]
@@ -759,7 +969,9 @@ invalid alice 20 command
             serde_json::json!({
                 "id": "host-1", "online": true, "error": null, "host": "node-1", "up": "",
                 "load": [0.0, 0.0, 0.0], "ncpu": 0, "mem": {"total": 0, "used": 0},
-                "disks": [], "gpus": [], "procs": []
+                "disks": [], "gpus": [], "procs": [],
+                "network": {"available": false, "rx_bytes": 0, "tx_bytes": 0, "uptime_seconds": 0},
+                "top_procs": []
             })
         );
         assert_eq!(
@@ -768,7 +980,9 @@ invalid alice 20 command
             serde_json::json!({
                 "id": "host-1", "online": false, "error": "connection failed", "host": "", "up": "",
                 "load": [0.0, 0.0, 0.0], "ncpu": 0, "mem": {"total": 0, "used": 0},
-                "disks": [], "gpus": [], "procs": []
+                "disks": [], "gpus": [], "procs": [],
+                "network": {"available": false, "rx_bytes": 0, "tx_bytes": 0, "uptime_seconds": 0},
+                "top_procs": []
             })
         );
     }

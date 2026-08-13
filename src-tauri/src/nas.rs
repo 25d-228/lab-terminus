@@ -445,6 +445,8 @@ mod tests {
         assert!(status.online);
         assert_eq!(status.error, None);
         assert_eq!(status.host, "nas");
+        assert_eq!(status.network, crate::status::NetworkStatus::default());
+        assert!(status.top_procs.is_empty());
         assert_eq!(
             status.disks,
             vec![DiskStatus {

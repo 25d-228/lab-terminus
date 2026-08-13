@@ -10,6 +10,7 @@
   const TERMINAL_SCROLLBACK = 8000;
   const MAX_PASTE_BYTES = 512 * 1024;
   const GPU_HISTORY_SAMPLES = 48;
+  const NETWORK_HISTORY_SAMPLES = 48;
   function esc(s) {
     const div = document.createElement("div");
     div.textContent = s == null ? "" : String(s);
@@ -101,6 +102,7 @@
     loadSeq: 0,
     collapsed: {},
     hist: {},
+    network: {},
     procOpen: {},
     chart: null,
     monTimer: null,
@@ -1511,6 +1513,73 @@
       if (samples.length > GPU_HISTORY_SAMPLES) samples.shift();
     });
   }
+  function resetNetwork(id, sample) {
+    ST.network[id] = { sample: sample || null, rate: null, rx: [], tx: [] };
+  }
+  function updateNetwork(id, fleet) {
+    const network = fleet && fleet.network;
+    if (
+      !network ||
+      network.available !== true ||
+      !Number.isSafeInteger(network.rx_bytes) ||
+      !Number.isSafeInteger(network.tx_bytes) ||
+      !Number.isSafeInteger(network.uptime_seconds) ||
+      network.rx_bytes < 0 ||
+      network.tx_bytes < 0 ||
+      network.uptime_seconds < 0
+    ) {
+      resetNetwork(id);
+      return;
+    }
+    const current = {
+      rx: network.rx_bytes,
+      tx: network.tx_bytes,
+      uptime: network.uptime_seconds,
+    };
+    const state = ST.network[id];
+    if (!state || !state.sample) {
+      resetNetwork(id, current);
+      return;
+    }
+    const elapsed = current.uptime - state.sample.uptime;
+    if (
+      !Number.isFinite(elapsed) ||
+      elapsed <= 0 ||
+      current.rx < state.sample.rx ||
+      current.tx < state.sample.tx
+    ) {
+      resetNetwork(id, current);
+      return;
+    }
+    const rx = (current.rx - state.sample.rx) / elapsed,
+      tx = (current.tx - state.sample.tx) / elapsed;
+    if (!Number.isFinite(rx) || !Number.isFinite(tx) || rx < 0 || tx < 0) {
+      resetNetwork(id, current);
+      return;
+    }
+    state.sample = current;
+    state.rate = { rx, tx };
+    state.rx.push(rx);
+    state.tx.push(tx);
+    if (state.rx.length > NETWORK_HISTORY_SAMPLES) state.rx.shift();
+    if (state.tx.length > NETWORK_HISTORY_SAMPLES) state.tx.shift();
+  }
+  function networkSparkline(points, tone) {
+    if (!points.length) return '<div class="lt-net-pending">Collecting trend…</div>';
+    const W = 100,
+      H = 28,
+      max = Math.max(1, ...points),
+      line =
+        points.length < 2
+          ? `0,${((1 - points[0] / max) * H).toFixed(2)} ${W},${((1 - points[0] / max) * H).toFixed(2)}`
+          : points
+              .map(
+                (value, index) =>
+                  `${((index / (points.length - 1)) * W).toFixed(2)},${((1 - value / max) * H).toFixed(2)}`,
+              )
+              .join(" ");
+    return `<svg class="lt-net-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polygon class="${tone}" points="${line} ${W},${H} 0,${H}"></polygon><polyline class="${tone}" points="${line}"></polyline></svg>`;
+  }
   function lineChart(series, danger, metric) {
     const W = 100,
       H = 40;
@@ -1590,15 +1659,58 @@
     } else if (server.kind !== "nas") {
       html += `<div class="lt-mhd"><b>GPUs</b><span class="ln"></span></div><div class="lt-note">No GPU on this host — CPU server · ${fleet.ncpu || "?"} cores · load ${fleet.load ? fleet.load[0] : "?"}</div>`;
     }
-    /* processes */
+    /* aggregate network throughput */
+    if (server.kind !== "nas") {
+      const networkAvailable = fleet.network && fleet.network.available === true,
+        network = networkAvailable
+          ? ST.network[id] || { rate: null, rx: [], tx: [] }
+          : { rate: null, rx: [], tx: [] },
+        collecting = networkAvailable && !network.rate,
+        span = Math.max(network.rx.length, network.tx.length),
+        spanLabel = !networkAvailable ? "unavailable" : span < 2 ? "collecting" : `${span} samples`,
+        receiveLabel = !networkAvailable
+          ? "Unavailable"
+          : collecting
+            ? "Collecting…"
+            : bytes(network.rate.rx) + "/s",
+        transmitLabel = !networkAvailable
+          ? "Unavailable"
+          : collecting
+            ? "Collecting…"
+            : bytes(network.rate.tx) + "/s";
+      html +=
+        `<div class="lt-mhd"><b>Network</b><span class="ln"></span><span class="cnt">${spanLabel}</span></div><div class="lt-network">` +
+        `<div class="lt-net-card"><div class="lt-net-top"><span>Receive</span><b class="${network.rate ? "lt-chart-tone-1" : "lt-tone-muted"}">${receiveLabel}</b></div>${networkSparkline(network.rx, "lt-chart-tone-1")}</div>` +
+        `<div class="lt-net-card"><div class="lt-net-top"><span>Transmit</span><b class="${network.rate ? "lt-chart-tone-2" : "lt-tone-muted"}">${transmitLabel}</b></div>${networkSparkline(network.tx, "lt-chart-tone-2")}</div></div>`;
+    }
+    /* general processes */
+    if (server.kind !== "nas") {
+      const topProcs = (fleet.top_procs || []).slice(0, 20);
+      html += `<div class="lt-mhd"><b>Top processes</b><span class="ln"></span><span class="cnt">CPU · ${topProcs.length}</span></div><div class="lt-panel"><div class="lt-proc-h lt-top-proc-h"><span>USER</span><span>PID</span><span>CPU</span><span>MEM</span><span>RSS</span><span>TIME</span><span>COMMAND</span></div>`;
+      if (topProcs.length)
+        topProcs.forEach((proc, procIndex) => {
+          const procKey = "top:" + proc.pid,
+            cpuPct = Number(proc.cpu_pct),
+            memoryPct = Number(proc.memory_pct);
+          html +=
+            `<div class="lt-proc lt-top-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[procKey] ? " open" : ""}" data-proc-key="${procKey}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-cpu">${Number.isFinite(cpuPct) ? cpuPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-pct">${Number.isFinite(memoryPct) ? memoryPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-rss">${bytes(proc.resident_bytes) || "—"}</span><span class="lt-proc-time">${esc(proc.elapsed || "")}</span><span class="lt-proc-cmd" title="${esc(proc.command || "")}">${esc(proc.command || "")}</span></div>` +
+            (ST.procOpen[procKey]
+              ? `<div class="lt-proc-full">${esc(proc.command || "")}</div>`
+              : "");
+        });
+      else html += '<div class="lt-proc-empty">No process telemetry reported.</div>';
+      html += "</div>";
+    }
+    /* GPU processes */
     if (server.kind !== "nas") {
       const procs = (fleet.procs || []).slice().sort((a, b) => (b.mem || 0) - (a.mem || 0));
-      html += `<div class="lt-mhd"><b>Processes</b><span class="ln"></span><span class="cnt">${procs.length}</span></div><div class="lt-panel"><div class="lt-proc-h"><span>USER</span><span>PID</span><span>GPU</span><span>VRAM</span><span>TIME</span><span>COMMAND</span></div>`;
+      html += `<div class="lt-mhd"><b>GPU processes</b><span class="ln"></span><span class="cnt">${procs.length}</span></div><div class="lt-panel"><div class="lt-proc-h"><span>USER</span><span>PID</span><span>GPU</span><span>VRAM</span><span>TIME</span><span>COMMAND</span></div>`;
       if (procs.length)
         procs.forEach((proc, procIndex) => {
+          const procKey = "gpu:" + proc.pid;
           html +=
-            `<div class="lt-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[proc.pid] ? " open" : ""}" data-pid="${proc.pid}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-gpu">${proc.gpu}</span><span class="lt-proc-mem">${GB(proc.mem).toFixed(1)} GB</span><span class="lt-proc-time">${esc(proc.etime || "")}</span><span class="lt-proc-cmd" title="${esc(proc.cmd || "")}">${esc(proc.cmd || "")}</span></div>` +
-            (ST.procOpen[proc.pid] ? `<div class="lt-proc-full">${esc(proc.cmd || "")}</div>` : "");
+            `<div class="lt-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[procKey] ? " open" : ""}" data-proc-key="${procKey}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-gpu">${proc.gpu}</span><span class="lt-proc-mem">${GB(proc.mem).toFixed(1)} GB</span><span class="lt-proc-time">${esc(proc.etime || "")}</span><span class="lt-proc-cmd" title="${esc(proc.cmd || "")}">${esc(proc.cmd || "")}</span></div>` +
+            (ST.procOpen[procKey] ? `<div class="lt-proc-full">${esc(proc.cmd || "")}</div>` : "");
         });
       else
         html += `<div class="lt-proc-empty">No GPU processes${gpuList.length ? " — GPUs idle, or other users’ jobs not visible" : ""}.</div>`;
@@ -1688,9 +1800,13 @@
         .then((status) => {
           FLEET[cur] = status;
           pushHist(cur);
+          updateNetwork(cur, status);
           if (ST.view === "server" && ST.tab === "monitor" && ST.active === cur) viewMonitor();
         })
-        .catch(() => {});
+        .catch(() => {
+          resetNetwork(cur);
+          if (ST.view === "server" && ST.tab === "monitor" && ST.active === cur) viewMonitor();
+        });
     }, MONITOR_POLL_MS);
   }
   function renderView() {
@@ -1705,6 +1821,8 @@
     if (ST.tab === "explorer") viewExplorer();
     else if (ST.tab === "terminal") viewTerminal();
     else {
+      resetNetwork(ST.active);
+      updateNetwork(ST.active, FLEET[ST.active]);
       viewMonitor();
       startMon();
     }
@@ -2023,10 +2141,10 @@
       }
       return;
     }
-    const prow = e.target.closest(".lt-proc[data-pid]");
+    const prow = e.target.closest(".lt-proc[data-proc-key]");
     if (prow) {
-      const pid = prow.getAttribute("data-pid");
-      ST.procOpen[pid] = !ST.procOpen[pid];
+      const procKey = prow.getAttribute("data-proc-key");
+      ST.procOpen[procKey] = !ST.procOpen[procKey];
       viewMonitor();
       return;
     }
