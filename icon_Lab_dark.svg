@@ -1,14 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 340" width="340" height="340">
-  <title>lab-terminus-icon-light</title>
+  <title>lab-terminus-icon-dark</title>
 
   <!-- 1. canvas -->
-  <rect width="340" height="340" rx="16" ry="16" fill="#E9D7C2"/>
+  <rect width="340" height="340" rx="16" ry="16" fill="#3D3D3D"/>
 
   <!-- 2. glyph: shell prompt — chevron and block cursor -->
   <g transform="translate(15, 0)"
-     fill="none" stroke="#3D3D3D" stroke-linecap="round" stroke-linejoin="round">
+     fill="none" stroke="#F5E6D8" stroke-linecap="round" stroke-linejoin="round">
     <path d="M 90 110 L 148 168 L 90 226" stroke-width="25"/>
-    <rect x="172" y="138" width="58" height="26" rx="10" fill="#3D3D3D" stroke="none"/>
+    <rect x="172" y="138" width="58" height="26" rx="10" fill="#F5E6D8" stroke="none"/>
   </g>
 
   <!-- 3. mascot: same place in every icon, never moved or resized -->
