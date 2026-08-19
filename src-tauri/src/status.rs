@@ -36,6 +36,25 @@ pub struct GpuProcessStatus {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct NetworkStatus {
+    pub available: bool,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub uptime_seconds: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TopProcessStatus {
+    pub pid: i64,
+    pub user: String,
+    pub cpu_pct: f64,
+    pub memory_pct: f64,
+    pub resident_bytes: u64,
+    pub elapsed: String,
+    pub command: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct HostStatus {
     pub id: String,
     pub online: bool,
@@ -48,4 +67,6 @@ pub struct HostStatus {
     pub disks: Vec<DiskStatus>,
     pub gpus: Vec<GpuStatus>,
     pub procs: Vec<GpuProcessStatus>,
+    pub network: NetworkStatus,
+    pub top_procs: Vec<TopProcessStatus>,
 }
