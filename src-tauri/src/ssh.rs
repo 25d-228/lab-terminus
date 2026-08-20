@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use russh::client::{self, Handle};
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey};
 use russh::ChannelMsg;
+use serde::Deserialize;
 
 use crate::config::{self, Server};
 use crate::status::{
@@ -16,20 +17,53 @@ use crate::status::{
     TopProcessStatus,
 };
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ProcessScope {
+    #[default]
+    Mine,
+    Others,
+    Root,
+}
+
+impl ProcessScope {
+    fn row_limit(self) -> usize {
+        match self {
+            Self::Mine => 20,
+            Self::Others | Self::Root => 50,
+        }
+    }
+}
+
 // ---- one round trip per host gathers everything the Monitor needs ----
-pub(crate) const GATHER: &str = r#"echo '@@HOST'; hostname
+const GATHER_BEFORE_TOP: &str = r#"echo '@@HOST'; hostname
 echo '@@UP'; awk '{print int($1)}' /proc/uptime
 echo '@@LOAD'; cat /proc/loadavg
 echo '@@NCPU'; nproc
 echo '@@MEM'; free -b | awk 'NR==2{print $2, $3}'
 echo '@@DF'; df -B1 -x tmpfs -x devtmpfs -x overlay -x squashfs --output=target,size,used 2>/dev/null | tail -n +2
 echo '@@NET'; cat /proc/net/dev 2>/dev/null
-echo '@@TOP'; LC_ALL=C ps ww -eo pid=,user:32=,pcpu=,pmem=,rss=,etimes=,args= --sort=-pcpu,-rss 2>/dev/null | head -n 20
+echo '@@TOP'; "#;
+
+const MINE_TOP: &str = r#"EFFECTIVE_UID=$(id -u); LC_ALL=C ps ww -eo uid=,pid=,user:32=,pcpu=,pmem=,rss=,etimes=,args= --sort=-pcpu,-rss 2>/dev/null | awk -v uid="$EFFECTIVE_UID" '$1 == uid { sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, ""); print }' | head -n 20"#;
+const OTHERS_TOP: &str = r#"EFFECTIVE_UID=$(id -u); LC_ALL=C ps ww -eo uid=,pid=,user:32=,pcpu=,pmem=,rss=,etimes=,args= --sort=-pcpu,-rss 2>/dev/null | awk -v uid="$EFFECTIVE_UID" '$1 != uid && $1 != 0 { sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, ""); print }' | head -n 50"#;
+const ROOT_TOP: &str = r#"LC_ALL=C ps ww -eo uid=,pid=,user:32=,pcpu=,pmem=,rss=,etimes=,args= --sort=-pcpu,-rss 2>/dev/null | awk '$1 == 0 { sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, ""); print }' | head -n 50"#;
+
+const GATHER_AFTER_TOP: &str = r#"
 echo '@@GPU'; nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw,power.limit --format=csv,noheader,nounits 2>/dev/null
 echo '@@APPS'; nvidia-smi --query-compute-apps=pid,gpu_uuid,used_memory --format=csv,noheader,nounits 2>/dev/null
 PIDS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' | sort -u | paste -sd, -)
 echo '@@PS'; if [ -n "$PIDS" ]; then ps -o pid= -o user:32= -o etimes= -o args= -p "$PIDS" 2>/dev/null; fi
 echo '@@END'"#;
+
+pub(crate) fn gather_command(process_scope: ProcessScope) -> String {
+    let top = match process_scope {
+        ProcessScope::Mine => MINE_TOP,
+        ProcessScope::Others => OTHERS_TOP,
+        ProcessScope::Root => ROOT_TOP,
+    };
+    [GATHER_BEFORE_TOP, top, GATHER_AFTER_TOP].concat()
+}
 
 pub(crate) fn es<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -246,7 +280,7 @@ fn parse_network(lines: &[String], uptime_seconds: Option<u64>) -> NetworkStatus
     }
 }
 
-fn parse_top_processes(lines: &[String]) -> Vec<TopProcessStatus> {
+fn parse_top_processes(lines: &[String], limit: usize) -> Vec<TopProcessStatus> {
     let mut processes = Vec::new();
     for line in lines {
         let Some((pid, rest)) = next_token(line) else {
@@ -305,7 +339,7 @@ fn parse_top_processes(lines: &[String]) -> Vec<TopProcessStatus> {
             .total_cmp(&a.cpu_pct)
             .then_with(|| b.resident_bytes.cmp(&a.resident_bytes))
     });
-    processes.truncate(20);
+    processes.truncate(limit);
     processes
 }
 
@@ -381,7 +415,7 @@ fn parse_apps(lines: &[String]) -> Vec<(i64, String, i64)> {
     apps
 }
 
-pub(crate) fn parse_gather(text: &str) -> HostStatus {
+pub(crate) fn parse_gather(text: &str, process_scope: ProcessScope) -> HostStatus {
     let mut sec: HashMap<String, Vec<String>> = HashMap::new();
     let mut cur: Option<String> = None;
     for line in text.lines() {
@@ -431,7 +465,7 @@ pub(crate) fn parse_gather(text: &str) -> HostStatus {
     };
     let disks = parse_disks(&get("DF"));
     let network = parse_network(&get("NET"), uptime_seconds);
-    let top_procs = parse_top_processes(&get("TOP"));
+    let top_procs = parse_top_processes(&get("TOP"), process_scope.row_limit());
     let (gpus, uuid_to_index) = parse_gpus(&get("GPU"));
     let apps = parse_apps(&get("APPS"));
     let ps_by_pid = parse_ps_map(&get("PS"));
@@ -476,28 +510,28 @@ pub(crate) fn offline(s: &Server, err: &str) -> HostStatus {
     }
 }
 
-pub(crate) fn online(s: &Server, out: &str) -> HostStatus {
-    let mut status = parse_gather(out);
+pub(crate) fn online(s: &Server, out: &str, process_scope: ProcessScope) -> HostStatus {
+    let mut status = parse_gather(out, process_scope);
     status.id = s.id.clone();
     status.online = true;
     status
 }
 
 // ---------------------------------------------------------------- status / fleet
-pub async fn status_for(s: Server) -> HostStatus {
+pub async fn status_for(s: Server, process_scope: ProcessScope) -> HostStatus {
     match s.kind.as_str() {
-        "wsl" => return crate::wsl::status(&s).await,
+        "wsl" => return crate::wsl::status(&s, process_scope).await,
         "nas" => return crate::nas::status(&s).await,
         "ssh" => {}
         _ => return offline(&s, "unsupported host kind"),
     }
     match async {
         let handle = connect(&s).await?;
-        exec_raw(&handle, GATHER).await
+        exec_raw(&handle, &gather_command(process_scope)).await
     }
     .await
     {
-        Ok(out) => online(&s, &out),
+        Ok(out) => online(&s, &out, process_scope),
         Err(e) => offline(&s, &e),
     }
 }
@@ -529,7 +563,7 @@ async fn fleet_scan() -> Vec<Option<HostStatus>> {
     let n = servers.len();
     let mut set = tokio::task::JoinSet::new();
     for (i, s) in servers.into_iter().enumerate() {
-        set.spawn(async move { (i, status_for(s).await) });
+        set.spawn(async move { (i, status_for(s, ProcessScope::Mine).await) });
     }
     let mut completed = Vec::with_capacity(n);
     while let Some(res) = set.join_next().await {
@@ -781,6 +815,7 @@ Inter-|   Receive                                                |  Transmit
 4321 alice 3661 python train.py --epochs 2
 @@END
 "#,
+            ProcessScope::Mine,
         );
 
         assert_eq!(gathered.host, "compute-01");
@@ -897,6 +932,7 @@ invalid, GPU-abc, 100
 invalid alice 20 command
 @@END
 "#,
+            ProcessScope::Mine,
         );
 
         assert_eq!(gathered.host, "");
@@ -926,6 +962,7 @@ bad row
 22 bob inf 4.0 4096 60 malformed cpu
 @@END
 "#,
+            ProcessScope::Mine,
         );
 
         assert_eq!(gathered.network, NetworkStatus::default());
@@ -944,15 +981,20 @@ bad row
     }
 
     #[test]
-    fn top_processes_are_sorted_and_limited_to_twenty_rows() {
-        let lines: Vec<String> = (1..=25)
+    fn top_processes_are_sorted_and_enforce_scope_limits() {
+        let mut lines: Vec<String> = (1..=60)
             .map(|pid| format!("{pid} user {} 1.0 {pid} 60 command {pid}", pid % 4))
             .collect();
+        lines.push("malformed row".to_string());
 
-        let processes = parse_top_processes(&lines);
+        let mine = parse_top_processes(&lines, ProcessScope::Mine.row_limit());
+        let others = parse_top_processes(&lines, ProcessScope::Others.row_limit());
+        let root = parse_top_processes(&lines, ProcessScope::Root.row_limit());
 
-        assert_eq!(processes.len(), 20);
-        assert!(processes
+        assert_eq!(mine.len(), 20);
+        assert_eq!(others.len(), 50);
+        assert_eq!(root.len(), 50);
+        assert!(others
             .windows(2)
             .all(|pair| pair[0].cpu_pct > pair[1].cpu_pct
                 || (pair[0].cpu_pct == pair[1].cpu_pct
@@ -960,12 +1002,39 @@ bad row
     }
 
     #[test]
+    fn process_scopes_generate_fixed_uid_filters_and_row_limits() {
+        let mine = gather_command(ProcessScope::Mine);
+        let others = gather_command(ProcessScope::Others);
+        let root = gather_command(ProcessScope::Root);
+
+        assert!(mine.contains("EFFECTIVE_UID=$(id -u)"));
+        assert!(mine.contains("$1 == uid {"));
+        assert!(mine.contains("head -n 20"));
+
+        assert!(others.contains("EFFECTIVE_UID=$(id -u)"));
+        assert!(others.contains("$1 != uid && $1 != 0 {"));
+        assert!(others.contains("head -n 50"));
+
+        assert!(root.contains("awk '$1 == 0 {"));
+        assert!(root.contains("head -n 50"));
+
+        for command in [mine, others, root] {
+            assert_eq!(command.matches("echo '@@TOP'").count(), 1);
+            assert_eq!(command.matches("echo '@@END'").count(), 1);
+        }
+    }
+
+    #[test]
     fn online_and_offline_serialize_the_complete_contract() {
         let server = server("host-1");
 
         assert_eq!(
-            serde_json::to_value(online(&server, "@@HOST\nnode-1\n@@END\n"))
-                .expect("online status should serialize"),
+            serde_json::to_value(online(
+                &server,
+                "@@HOST\nnode-1\n@@END\n",
+                ProcessScope::Mine,
+            ))
+            .expect("online status should serialize"),
             serde_json::json!({
                 "id": "host-1", "online": true, "error": null, "host": "node-1", "up": "",
                 "load": [0.0, 0.0, 0.0], "ncpu": 0, "mem": {"total": 0, "used": 0},
@@ -990,9 +1059,9 @@ bad row
     #[test]
     fn fleet_results_restore_configured_order() {
         let completed = vec![
-            (2, online(&server("third"), "")),
-            (0, online(&server("first"), "")),
-            (1, online(&server("second"), "")),
+            (2, online(&server("third"), "", ProcessScope::Mine)),
+            (0, online(&server("first"), "", ProcessScope::Mine)),
+            (1, online(&server("second"), "", ProcessScope::Mine)),
         ];
 
         let ordered = configured_order(3, completed);

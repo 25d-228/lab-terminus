@@ -125,11 +125,17 @@ async fn fleet() -> impl IntoResponse {
     })
 }
 
-async fn host_status(Path(id): Path<String>) -> Response {
+#[derive(Deserialize)]
+struct StatusQuery {
+    #[serde(default)]
+    process_scope: ssh::ProcessScope,
+}
+
+async fn host_status(Path(id): Path<String>, Query(q): Query<StatusQuery>) -> Response {
     let Some(s) = config::find(&id) else {
         return unknown_server();
     };
-    Json(ssh::status_for(s).await).into_response()
+    Json(ssh::status_for(s, q.process_scope).await).into_response()
 }
 
 #[derive(Deserialize)]
@@ -231,5 +237,43 @@ async fn static_handler(uri: Uri) -> Response {
         )
             .into_response(),
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_query_defaults_to_mine() {
+        let query: StatusQuery = serde_json::from_value(serde_json::json!({}))
+            .expect("an omitted process scope should deserialize");
+
+        assert_eq!(query.process_scope, ssh::ProcessScope::Mine);
+    }
+
+    #[test]
+    fn status_query_accepts_each_supported_scope() {
+        for (value, expected) in [
+            ("mine", ssh::ProcessScope::Mine),
+            ("others", ssh::ProcessScope::Others),
+            ("root", ssh::ProcessScope::Root),
+        ] {
+            let query: StatusQuery = serde_json::from_value(serde_json::json!({
+                "process_scope": value
+            }))
+            .expect("a supported process scope should deserialize");
+
+            assert_eq!(query.process_scope, expected);
+        }
+    }
+
+    #[test]
+    fn unsupported_status_scope_is_rejected_before_the_handler_can_run() {
+        let result = serde_json::from_value::<StatusQuery>(serde_json::json!({
+            "process_scope": "mine; sudo ps"
+        }));
+
+        assert!(result.is_err());
     }
 }

@@ -51,9 +51,9 @@ async fn run_status(cmd: &str) -> Result<(i32, String, String), String> {
     ))
 }
 
-pub async fn status(s: &Server) -> HostStatus {
-    match run(ssh::GATHER).await {
-        Ok(out) => ssh::online(s, &out),
+pub async fn status(s: &Server, process_scope: ssh::ProcessScope) -> HostStatus {
+    match run(&ssh::gather_command(process_scope)).await {
+        Ok(out) => ssh::online(s, &out, process_scope),
         Err(e) => ssh::offline(s, &e),
     }
 }

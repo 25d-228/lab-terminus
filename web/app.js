@@ -11,6 +11,7 @@
   const MAX_PASTE_BYTES = 512 * 1024;
   const GPU_HISTORY_SAMPLES = 48;
   const NETWORK_HISTORY_SAMPLES = 48;
+  const PROCESS_SCOPE_LABELS = { mine: "Mine", others: "Others", root: "Root" };
   function esc(s) {
     const div = document.createElement("div");
     div.textContent = s == null ? "" : String(s);
@@ -103,6 +104,7 @@
     collapsed: {},
     hist: {},
     network: {},
+    process: {},
     procOpen: {},
     chart: null,
     monTimer: null,
@@ -1497,6 +1499,71 @@
   }
 
   /* ---------------- monitor (availability · trends · processes · vitals) ---------------- */
+  function processState(id) {
+    if (!ST.process[id]) {
+      const status = FLEET[id];
+      ST.process[id] = {
+        scope: "mine",
+        rows: status && Array.isArray(status.top_procs) ? status.top_procs : [],
+        loadedScope: "mine",
+        loading: false,
+        error: null,
+        requestSeq: 0,
+      };
+    }
+    return ST.process[id];
+  }
+  function syncMineProcessRows(id, status) {
+    const state = ST.process[id];
+    if (!state || state.scope !== "mine" || state.loading) return;
+    state.rows = status && Array.isArray(status.top_procs) ? status.top_procs : [];
+    state.loadedScope = "mine";
+    state.error = null;
+  }
+  function refreshMonitorStatus(id, showLoading) {
+    const server = byId[id];
+    if (!server || server.kind === "nas") return;
+    const state = processState(id),
+      scope = state.scope,
+      requestSeq = ++state.requestSeq;
+    if (showLoading) {
+      state.rows = [];
+      state.loadedScope = null;
+      state.loading = true;
+      state.error = null;
+      if (ST.view === "server" && ST.tab === "monitor" && ST.active === id) viewMonitor();
+    }
+    api("/api/" + id + "/status?process_scope=" + encodeURIComponent(scope))
+      .then((status) => {
+        if (state.requestSeq !== requestSeq || state.scope !== scope) return;
+        FLEET[id] = status;
+        state.rows = Array.isArray(status.top_procs) ? status.top_procs : [];
+        state.loadedScope = scope;
+        state.loading = false;
+        state.error = null;
+        pushHist(id);
+        updateNetwork(id, status);
+        if (ST.view === "server" && ST.tab === "monitor" && ST.active === id) viewMonitor();
+      })
+      .catch((error) => {
+        if (state.requestSeq !== requestSeq || state.scope !== scope) return;
+        state.rows = [];
+        state.loadedScope = null;
+        state.loading = false;
+        state.error = error && error.message ? error.message : "Status refresh failed";
+        resetNetwork(id);
+        if (ST.view === "server" && ST.tab === "monitor" && ST.active === id) viewMonitor();
+      });
+  }
+  function selectProcessScope(scope) {
+    const id = ST.active,
+      server = byId[id];
+    if (!server || server.kind === "nas" || !PROCESS_SCOPE_LABELS[scope]) return;
+    const state = processState(id);
+    if (state.scope === scope) return;
+    state.scope = scope;
+    refreshMonitorStatus(id, true);
+  }
   function temperatureTone(temp) {
     if (temp < 60) return "online";
     if (temp < 75) return "busy";
@@ -1620,6 +1687,13 @@
       server = byId[id],
       fleet = FLEET[id];
     const view = $("lt-view");
+    const focusedScopeControl =
+      document.activeElement && document.activeElement.closest
+        ? document.activeElement.closest("[data-process-scope]")
+        : null;
+    const focusedScope = focusedScopeControl
+      ? focusedScopeControl.getAttribute("data-process-scope")
+      : null;
     view.className = "lt-view pad";
     if (!fleet) {
       view.innerHTML = '<div class="lt-empty">Connecting…</div>';
@@ -1685,20 +1759,47 @@
     }
     /* general processes */
     if (server.kind !== "nas") {
-      const topProcs = (fleet.top_procs || []).slice(0, 20);
-      html += `<div class="lt-mhd"><b>Top processes</b><span class="ln"></span><span class="cnt">CPU · ${topProcs.length}</span></div><div class="lt-panel"><div class="lt-proc-h lt-top-proc-h"><span>USER</span><span>PID</span><span>CPU</span><span>MEM</span><span>RSS</span><span>TIME</span><span>COMMAND</span></div>`;
-      if (topProcs.length)
+      const process = processState(id),
+        scopeLabel = PROCESS_SCOPE_LABELS[process.scope],
+        rowLimit = process.scope === "mine" ? 20 : 50,
+        topProcs =
+          process.loadedScope === process.scope ? process.rows.slice(0, rowLimit) : [],
+        scopeControls = Object.entries(PROCESS_SCOPE_LABELS)
+          .map(
+            ([scope, label]) =>
+              `<button type="button" class="lt-proc-scope${process.scope === scope ? " on" : ""}" data-process-scope="${scope}" aria-pressed="${process.scope === scope}" aria-label="Show ${label} processes">${label}</button>`,
+          )
+          .join(""),
+        countLabel = process.loading
+          ? "Loading"
+          : process.error
+            ? "Error"
+            : `${scopeLabel} · ${topProcs.length}`;
+      html += `<div class="lt-mhd lt-process-heading"><b>Top processes</b><span class="ln"></span><div class="lt-proc-scopes" role="group" aria-label="Process owner scope">${scopeControls}</div><span class="cnt">${countLabel}</span></div><div class="lt-panel"><div class="lt-proc-h lt-top-proc-h"><span>USER</span><span>PID</span><span>CPU</span><span>MEM</span><span>RSS</span><span>TIME</span><span>COMMAND</span></div>`;
+      if (process.loading) {
+        html += `<div class="lt-proc-empty" role="status" aria-live="polite">Loading ${scopeLabel} processes…</div>`;
+      } else if (process.error) {
+        html += `<div class="lt-proc-empty lt-proc-error" role="alert">Could not load ${scopeLabel} processes. ${esc(process.error)}</div>`;
+      } else if (topProcs.length) {
         topProcs.forEach((proc, procIndex) => {
-          const procKey = "top:" + proc.pid,
+          const procKey = "top:" + process.scope + ":" + proc.pid,
             cpuPct = Number(proc.cpu_pct),
             memoryPct = Number(proc.memory_pct);
           html +=
-            `<div class="lt-proc lt-top-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[procKey] ? " open" : ""}" data-proc-key="${procKey}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-cpu">${Number.isFinite(cpuPct) ? cpuPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-pct">${Number.isFinite(memoryPct) ? memoryPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-rss">${bytes(proc.resident_bytes) || "—"}</span><span class="lt-proc-time">${esc(proc.elapsed || "")}</span><span class="lt-proc-cmd" title="${esc(proc.command || "")}">${esc(proc.command || "")}</span></div>` +
+            `<div class="lt-proc lt-top-proc${process.scope === "mine" ? " me" : ""}${ST.procOpen[procKey] ? " open" : ""}" data-proc-key="${procKey}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-cpu">${Number.isFinite(cpuPct) ? cpuPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-pct">${Number.isFinite(memoryPct) ? memoryPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-rss">${bytes(proc.resident_bytes) || "—"}</span><span class="lt-proc-time">${esc(proc.elapsed || "")}</span><span class="lt-proc-cmd" title="${esc(proc.command || "")}">${esc(proc.command || "")}</span></div>` +
             (ST.procOpen[procKey]
               ? `<div class="lt-proc-full">${esc(proc.command || "")}</div>`
               : "");
         });
-      else html += '<div class="lt-proc-empty">No process telemetry reported.</div>';
+      } else {
+        const emptyMessage =
+          process.scope === "mine"
+            ? "No processes owned by your remote account."
+            : process.scope === "others"
+              ? "No processes owned by other non-root accounts."
+              : "No root-owned processes.";
+        html += `<div class="lt-proc-empty">${emptyMessage}</div>`;
+      }
       html += "</div>";
     }
     /* GPU processes */
@@ -1782,6 +1883,10 @@
     }
     html += "</div>";
     view.innerHTML = html;
+    if (focusedScope) {
+      const control = view.querySelector(`[data-process-scope="${focusedScope}"]`);
+      if (control) control.focus();
+    }
   }
 
   /* ---------------- dispatch ---------------- */
@@ -1796,17 +1901,7 @@
     if (!server || server.kind === "nas") return;
     ST.monTimer = setInterval(() => {
       const cur = ST.active;
-      api("/api/" + cur + "/status")
-        .then((status) => {
-          FLEET[cur] = status;
-          pushHist(cur);
-          updateNetwork(cur, status);
-          if (ST.view === "server" && ST.tab === "monitor" && ST.active === cur) viewMonitor();
-        })
-        .catch(() => {
-          resetNetwork(cur);
-          if (ST.view === "server" && ST.tab === "monitor" && ST.active === cur) viewMonitor();
-        });
+      refreshMonitorStatus(cur, false);
     }, MONITOR_POLL_MS);
   }
   function renderView() {
@@ -2058,6 +2153,11 @@
       renderView();
       return;
     }
+    const processScope = e.target.closest("[data-process-scope]");
+    if (processScope) {
+      selectProcessScope(processScope.getAttribute("data-process-scope"));
+      return;
+    }
     const go = e.target.closest("[data-go]");
     if (go) {
       ST.filter = "";
@@ -2223,6 +2323,7 @@
       const fleet = await api("/api/fleet");
       fleet.servers.forEach((server) => {
         FLEET[server.id] = server;
+        syncMineProcessRows(server.id, server);
       });
       if (fleet.rev !== undefined && ST.cfgRev !== undefined && fleet.rev !== ST.cfgRev) {
         await refreshRegistry();
