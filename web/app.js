@@ -1508,7 +1508,10 @@
         loadedScope: "mine",
         loading: false,
         error: null,
-        requestSeq: 0,
+        scopeRevision: 0,
+        nextRequestId: 0,
+        appliedRequestId: 0,
+        inFlightRevision: null,
       };
     }
     return ST.process[id];
@@ -1525,7 +1528,10 @@
     if (!server || server.kind === "nas") return;
     const state = processState(id),
       scope = state.scope,
-      requestSeq = ++state.requestSeq;
+      scopeRevision = state.scopeRevision;
+    if (!showLoading && state.inFlightRevision === scopeRevision) return;
+    const requestId = ++state.nextRequestId;
+    state.inFlightRevision = scopeRevision;
     if (showLoading) {
       state.rows = [];
       state.loadedScope = null;
@@ -1535,7 +1541,13 @@
     }
     api("/api/" + id + "/status?process_scope=" + encodeURIComponent(scope))
       .then((status) => {
-        if (state.requestSeq !== requestSeq || state.scope !== scope) return;
+        if (
+          state.scopeRevision !== scopeRevision ||
+          state.scope !== scope ||
+          requestId <= state.appliedRequestId
+        )
+          return;
+        state.appliedRequestId = requestId;
         FLEET[id] = status;
         state.rows = Array.isArray(status.top_procs) ? status.top_procs : [];
         state.loadedScope = scope;
@@ -1546,13 +1558,22 @@
         if (ST.view === "server" && ST.tab === "monitor" && ST.active === id) viewMonitor();
       })
       .catch((error) => {
-        if (state.requestSeq !== requestSeq || state.scope !== scope) return;
+        if (
+          state.scopeRevision !== scopeRevision ||
+          state.scope !== scope ||
+          requestId <= state.appliedRequestId
+        )
+          return;
+        state.appliedRequestId = requestId;
         state.rows = [];
         state.loadedScope = null;
         state.loading = false;
         state.error = error && error.message ? error.message : "Status refresh failed";
         resetNetwork(id);
         if (ST.view === "server" && ST.tab === "monitor" && ST.active === id) viewMonitor();
+      })
+      .finally(() => {
+        if (state.inFlightRevision === scopeRevision) state.inFlightRevision = null;
       });
   }
   function selectProcessScope(scope) {
@@ -1562,6 +1583,7 @@
     const state = processState(id);
     if (state.scope === scope) return;
     state.scope = scope;
+    state.scopeRevision++;
     refreshMonitorStatus(id, true);
   }
   function temperatureTone(temp) {

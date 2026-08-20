@@ -244,36 +244,42 @@ async fn static_handler(uri: Uri) -> Response {
 mod tests {
     use super::*;
 
+    fn extract_status_query(uri: &str) -> StatusQuery {
+        let uri: Uri = uri.parse().expect("test URI should be valid");
+        let Query(query) =
+            Query::<StatusQuery>::try_from_uri(&uri).expect("query should be accepted by Axum");
+        query
+    }
+
     #[test]
-    fn status_query_defaults_to_mine() {
-        let query: StatusQuery = serde_json::from_value(serde_json::json!({}))
-            .expect("an omitted process scope should deserialize");
+    fn axum_query_extraction_defaults_an_omitted_scope_to_mine() {
+        let query = extract_status_query("/api/host-1/status");
 
         assert_eq!(query.process_scope, ssh::ProcessScope::Mine);
     }
 
     #[test]
-    fn status_query_accepts_each_supported_scope() {
+    fn axum_query_extraction_accepts_each_supported_scope() {
         for (value, expected) in [
             ("mine", ssh::ProcessScope::Mine),
             ("others", ssh::ProcessScope::Others),
             ("root", ssh::ProcessScope::Root),
         ] {
-            let query: StatusQuery = serde_json::from_value(serde_json::json!({
-                "process_scope": value
-            }))
-            .expect("a supported process scope should deserialize");
+            let query = extract_status_query(&format!("/api/host-1/status?process_scope={value}"));
 
             assert_eq!(query.process_scope, expected);
         }
     }
 
     #[test]
-    fn unsupported_status_scope_is_rejected_before_the_handler_can_run() {
-        let result = serde_json::from_value::<StatusQuery>(serde_json::json!({
-            "process_scope": "mine; sudo ps"
-        }));
+    fn axum_rejects_an_unsupported_scope_before_the_handler_can_run() {
+        let uri: Uri = "/api/host-1/status?process_scope=all"
+            .parse()
+            .expect("test URI should be valid");
+        let Err(rejection) = Query::<StatusQuery>::try_from_uri(&uri) else {
+            panic!("an unsupported scope should be rejected by Axum");
+        };
 
-        assert!(result.is_err());
+        assert_eq!(rejection.into_response().status(), StatusCode::BAD_REQUEST);
     }
 }
