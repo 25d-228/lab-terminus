@@ -125,11 +125,17 @@ async fn fleet() -> impl IntoResponse {
     })
 }
 
-async fn host_status(Path(id): Path<String>) -> Response {
+#[derive(Deserialize)]
+struct StatusQuery {
+    #[serde(default)]
+    process_scope: ssh::ProcessScope,
+}
+
+async fn host_status(Path(id): Path<String>, Query(q): Query<StatusQuery>) -> Response {
     let Some(s) = config::find(&id) else {
         return unknown_server();
     };
-    Json(ssh::status_for(s).await).into_response()
+    Json(ssh::status_for(s, q.process_scope).await).into_response()
 }
 
 #[derive(Deserialize)]
@@ -231,5 +237,49 @@ async fn static_handler(uri: Uri) -> Response {
         )
             .into_response(),
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract_status_query(uri: &str) -> StatusQuery {
+        let uri: Uri = uri.parse().expect("test URI should be valid");
+        let Query(query) =
+            Query::<StatusQuery>::try_from_uri(&uri).expect("query should be accepted by Axum");
+        query
+    }
+
+    #[test]
+    fn axum_query_extraction_defaults_an_omitted_scope_to_mine() {
+        let query = extract_status_query("/api/host-1/status");
+
+        assert_eq!(query.process_scope, ssh::ProcessScope::Mine);
+    }
+
+    #[test]
+    fn axum_query_extraction_accepts_each_supported_scope() {
+        for (value, expected) in [
+            ("mine", ssh::ProcessScope::Mine),
+            ("others", ssh::ProcessScope::Others),
+            ("root", ssh::ProcessScope::Root),
+        ] {
+            let query = extract_status_query(&format!("/api/host-1/status?process_scope={value}"));
+
+            assert_eq!(query.process_scope, expected);
+        }
+    }
+
+    #[test]
+    fn axum_rejects_an_unsupported_scope_before_the_handler_can_run() {
+        let uri: Uri = "/api/host-1/status?process_scope=all"
+            .parse()
+            .expect("test URI should be valid");
+        let Err(rejection) = Query::<StatusQuery>::try_from_uri(&uri) else {
+            panic!("an unsupported scope should be rejected by Axum");
+        };
+
+        assert_eq!(rejection.into_response().status(), StatusCode::BAD_REQUEST);
     }
 }
