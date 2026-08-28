@@ -160,7 +160,7 @@ async fn wsl_pty(socket: WebSocket, cols: u16, rows: u16) {
                 None => break,
             },
             m = stream.next() => match m {
-                Some(Ok(Message::Binary(b))) => { if in_tx.send(b.to_vec()).is_err() { break; } }
+                Some(Ok(Message::Binary(b))) if in_tx.send(b.to_vec()).is_err() => break,
                 Some(Ok(Message::Text(t))) => {
                     let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) else { continue; };
                     if v["t"].as_str() != Some("r") { continue; }
