@@ -13,12 +13,41 @@ mod status;
 mod transfers;
 mod wsl;
 
+#[cfg(any(target_os = "windows", test))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 // Headless mode (LT_HEADLESS=1) serves the API on this fixed loopback address for testing.
 const HEADLESS_ADDR: &str = "127.0.0.1:8766";
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct InitialWindowReveal {
+    ready: AtomicBool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl InitialWindowReveal {
+    fn accept(
+        &self,
+        event: tauri::webview::PageLoadEvent,
+        loaded_url: &tauri::Url,
+        expected_url: &tauri::Url,
+    ) -> bool {
+        event == tauri::webview::PageLoadEvent::Finished
+            && loaded_url == expected_url
+            && self
+                .ready
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+}
 
 /// Open the OS file manager with the config file selected.
 fn reveal_config() {
@@ -46,11 +75,20 @@ fn reveal_config() {
     }
 }
 
+fn show_window(window: &tauri::WebviewWindow) {
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+}
+
 fn show_main(app: &tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    if !app.state::<InitialWindowReveal>().is_ready() {
+        return;
+    }
+
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        show_window(&window);
     }
 }
 
@@ -162,7 +200,11 @@ fn main() {
     if std::env::var("LT_HEADLESS").is_ok() {
         return run_headless();
     }
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.manage(InitialWindowReveal::default());
+
+    builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // second launch (e.g. double-clicking the shortcut while we're in the tray)
             // surfaces the existing window instead of starting a duplicate app
@@ -185,11 +227,11 @@ fn main() {
                 }
             });
 
-            let url = format!("http://127.0.0.1:{port}/");
+            let url: tauri::Url = format!("http://127.0.0.1:{port}/").parse().expect("url");
             let mut window_builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
-                tauri::WebviewUrl::External(url.parse().expect("url")),
+                tauri::WebviewUrl::External(url.clone()),
             )
             .title("Lab Terminus")
             .inner_size(1200.0, 800.0)
@@ -209,6 +251,23 @@ fn main() {
                 }
                 true
             });
+
+            #[cfg(target_os = "windows")]
+            {
+                let expected_url = url;
+                window_builder = window_builder
+                    .visible(false)
+                    .background_color(tauri::utils::config::Color(255, 255, 255, 255))
+                    .on_page_load(move |window, payload| {
+                        if window.state::<InitialWindowReveal>().accept(
+                            payload.event(),
+                            payload.url(),
+                            &expected_url,
+                        ) {
+                            show_window(&window);
+                        }
+                    });
+            }
 
             // Window chrome differs per platform. macOS: keep the native title bar but make it
             // an overlay, so the real "traffic light" buttons sit at the top-left (the Mac way)
@@ -262,5 +321,71 @@ async fn run_headless() {
     println!("[headless] Lab Terminus API on http://{HEADLESS_ADDR}");
     if let Err(e) = axum::serve(listener, server::router()).await {
         eprintln!("[headless] {e}");
+    }
+}
+
+#[cfg(test)]
+mod initial_window_reveal_tests {
+    use super::*;
+
+    fn initial_url() -> tauri::Url {
+        "http://127.0.0.1:49152/".parse().expect("test URL")
+    }
+
+    #[test]
+    fn started_event_does_not_reveal() {
+        let reveal = InitialWindowReveal::default();
+        let expected_url = initial_url();
+
+        assert!(!reveal.accept(
+            tauri::webview::PageLoadEvent::Started,
+            &expected_url,
+            &expected_url,
+        ));
+        assert!(!reveal.is_ready());
+    }
+
+    #[test]
+    fn finished_event_for_another_url_does_not_reveal() {
+        let reveal = InitialWindowReveal::default();
+        let expected_url = initial_url();
+        let other_url = "http://127.0.0.1:49153/".parse().expect("test URL");
+
+        assert!(!reveal.accept(
+            tauri::webview::PageLoadEvent::Finished,
+            &other_url,
+            &expected_url,
+        ));
+        assert!(!reveal.is_ready());
+    }
+
+    #[test]
+    fn first_finished_event_for_the_expected_url_reveals() {
+        let reveal = InitialWindowReveal::default();
+        let expected_url = initial_url();
+
+        assert!(reveal.accept(
+            tauri::webview::PageLoadEvent::Finished,
+            &expected_url,
+            &expected_url,
+        ));
+        assert!(reveal.is_ready());
+    }
+
+    #[test]
+    fn second_finished_event_does_not_reveal_again() {
+        let reveal = InitialWindowReveal::default();
+        let expected_url = initial_url();
+
+        assert!(reveal.accept(
+            tauri::webview::PageLoadEvent::Finished,
+            &expected_url,
+            &expected_url,
+        ));
+        assert!(!reveal.accept(
+            tauri::webview::PageLoadEvent::Finished,
+            &expected_url,
+            &expected_url,
+        ));
     }
 }
