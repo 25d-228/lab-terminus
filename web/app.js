@@ -1590,7 +1590,14 @@
       handleLabel = `${label}, position ${position} of ${total}. Alt plus Up or Down Arrow moves this section.`;
     return (
       `<section class="lt-monitor-section" data-monitor-section="${sectionId}">` +
-      `<div class="lt-mhd${headingClass}"><button type="button" class="lt-monitor-drag-handle" draggable="true" data-monitor-drag-handle="${sectionId}" aria-label="${handleLabel}" title="Drag to reorder · Alt+Arrow to move">${ph("dots-six-vertical")}</button><b>${label}</b><span class="ln"></span>${section.headingExtra || ""}</div>` +
+      `<div class="lt-mhd${headingClass}">` +
+      `<button type="button" class="lt-monitor-drag-handle" draggable="true" data-monitor-drag-handle="${sectionId}" aria-label="${handleLabel}" title="Drag to reorder · Alt+Arrow to move">` +
+      ph("dots-six-vertical") +
+      `</button>` +
+      `<b>${label}</b>` +
+      `<span class="ln"></span>` +
+      (section.headingExtra || "") +
+      `</div>` +
       section.body +
       `</section>`
     );
