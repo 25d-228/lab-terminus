@@ -12,7 +12,6 @@
   const GPU_HISTORY_SAMPLES = 48;
   const NETWORK_HISTORY_SAMPLES = 48;
   const PROCESS_SCOPE_LABELS = { mine: "Mine", others: "Others", root: "Root" };
-  const MONITOR_SECTION_ORDER_KEY = "lt-monitor-section-order";
   const MONITOR_SECTION_ORDER = [
     "gpus",
     "network",
@@ -1522,37 +1521,6 @@
   }
 
   /* ---------------- monitor (availability · trends · processes · vitals) ---------------- */
-  function normalizeMonitorSectionOrder(value) {
-    if (!Array.isArray(value)) return MONITOR_SECTION_ORDER.slice();
-    const known = new Set(MONITOR_SECTION_ORDER),
-      seen = new Set(),
-      order = [];
-    value.forEach((sectionId) => {
-      if (known.has(sectionId) && !seen.has(sectionId)) {
-        seen.add(sectionId);
-        order.push(sectionId);
-      }
-    });
-    MONITOR_SECTION_ORDER.forEach((sectionId) => {
-      if (!seen.has(sectionId)) order.push(sectionId);
-    });
-    return order;
-  }
-  function loadMonitorSectionOrder() {
-    try {
-      const stored = localStorage.getItem(MONITOR_SECTION_ORDER_KEY);
-      ST.monitorOrder = stored
-        ? normalizeMonitorSectionOrder(JSON.parse(stored))
-        : MONITOR_SECTION_ORDER.slice();
-    } catch (e) {
-      ST.monitorOrder = MONITOR_SECTION_ORDER.slice();
-    }
-  }
-  function saveMonitorSectionOrder() {
-    try {
-      localStorage.setItem(MONITOR_SECTION_ORDER_KEY, JSON.stringify(ST.monitorOrder));
-    } catch (e) {}
-  }
   function monitorAnnouncementRegion() {
     let region = $("lt-monitor-announcement");
     if (!region) {
@@ -1581,7 +1549,6 @@
     order.splice(targetIndex + (placeAfter ? 1 : 0), 0, sectionId);
     if (order.every((value, index) => value === ST.monitorOrder[index])) return false;
     ST.monitorOrder = order;
-    saveMonitorSectionOrder();
     return true;
   }
   function monitorSectionHtml(sectionId, section, position, total) {
@@ -2632,7 +2599,6 @@
   async function init() {
     applyTheme();
     monitorAnnouncementRegion();
-    loadMonitorSectionOrder();
     try {
       ST.collapsed = JSON.parse(localStorage.getItem("lt-collapsed") || "{}") || {};
     } catch (e) {}
