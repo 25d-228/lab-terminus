@@ -12,6 +12,7 @@
   const GPU_HISTORY_SAMPLES = 48;
   const NETWORK_HISTORY_SAMPLES = 48;
   const PROCESS_SCOPE_LABELS = { mine: "Mine", others: "Others", root: "Root" };
+  const OVERVIEW_LOCATION_LABELS = { all: "All", local: "Local", remote: "Remote" };
   const MONITOR_SECTION_ORDER = [
     "gpus",
     "network",
@@ -113,6 +114,7 @@
     filter: "",
     ovq: "",
     ovmode: "grid",
+    ovlocation: "all",
     termTabs: {},
     termActive: {},
     broadcast: false,
@@ -699,21 +701,62 @@
         : `<span class="lt-htag">${esc(s.gpuLabel || s.kind)}</span>`;
     return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.statusText)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
   }
+  function matchesOverviewLocation(server) {
+    if (ST.ovlocation === "local") return server.kind === "wsl";
+    if (ST.ovlocation === "remote") return server.kind === "ssh" || server.kind === "nas";
+    return true;
+  }
   function viewFleet() {
+    const focusedLocationControl =
+      document.activeElement && document.activeElement.closest
+        ? document.activeElement.closest("[data-ov-location]")
+        : null;
+    const focusedLocation = focusedLocationControl
+      ? focusedLocationControl.getAttribute("data-ov-location")
+      : null;
     const query = (ST.ovq || "").toLowerCase();
     const list = SERVERS.filter(
       (s) =>
-        !query || (s.name + " " + s.host + " " + (s.gpuLabel || "")).toLowerCase().includes(query),
+        matchesOverviewLocation(s) &&
+        (!query ||
+          (s.name + " " + s.host + " " + (s.gpuLabel || "")).toLowerCase().includes(query)),
     );
-    const mode = ST.ovmode === "list" ? "list" : "grid";
-    let html = `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${SERVERS.length} machines · key auth</span><div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" role="button" tabindex="0" aria-label="Grid view" aria-pressed="${mode === "grid"}" title="Grid view">${ph("squares-four")}</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" role="button" tabindex="0" aria-label="List view" aria-pressed="${mode === "list"}" title="List view">${ph("list")}</span></div><input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
-    if (!list.length) html += `<div class="lt-empty">No hosts match “${esc(ST.ovq)}”.</div>`;
-    else if (mode === "list")
+    const mode = ST.ovmode === "list" ? "list" : "grid",
+      countLabel =
+        list.length === SERVERS.length
+          ? `${SERVERS.length} machines`
+          : `${list.length}/${SERVERS.length} machines`,
+      locationControls = Object.entries(OVERVIEW_LOCATION_LABELS)
+        .map(
+          ([location, label]) =>
+            `<button type="button" class="${ST.ovlocation === location ? "on" : ""}" data-ov-location="${location}" aria-pressed="${ST.ovlocation === location}">${label}</button>`,
+        )
+        .join("");
+    let html =
+      `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${countLabel} · key auth</span>` +
+      `<div class="lt-ovloc" role="group" aria-label="Host location">${locationControls}</div>` +
+      `<div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" role="button" tabindex="0" aria-label="Grid view" aria-pressed="${mode === "grid"}" title="Grid view">${ph("squares-four")}</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" role="button" tabindex="0" aria-label="List view" aria-pressed="${mode === "list"}" title="List view">${ph("list")}</span></div>` +
+      `<input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
+    if (!list.length) {
+      const locationLabel = OVERVIEW_LOCATION_LABELS[ST.ovlocation].toLowerCase();
+      let emptyMessage;
+      if (query && ST.ovlocation !== "all")
+        emptyMessage = `No ${locationLabel} hosts match “${ST.ovq}”.`;
+      else if (query) emptyMessage = `No hosts match “${ST.ovq}”.`;
+      else if (ST.ovlocation !== "all")
+        emptyMessage = `No ${locationLabel} hosts match this location filter.`;
+      else emptyMessage = "No hosts configured.";
+      html += `<div class="lt-empty">${esc(emptyMessage)}</div>`;
+    } else if (mode === "list")
       html += '<div class="lt-hlist">' + list.map((s) => hostRow(s)).join("") + "</div>";
     else html += '<div class="lt-hgrid">' + list.map((s) => hostCard(s)).join("") + "</div>";
     const viewEl = $("lt-view");
     viewEl.className = "lt-view pad";
     viewEl.innerHTML = html;
+    if (focusedLocation) {
+      const control = viewEl.querySelector(`[data-ov-location="${focusedLocation}"]`);
+      if (control) control.focus();
+    }
   }
 
   /* ---------------- explorer ---------------- */
@@ -2310,6 +2353,15 @@
         localStorage.setItem("lt-ovmode", ST.ovmode);
       } catch (e) {}
       viewFleet();
+      return;
+    }
+    const locationControl = e.target.closest("[data-ov-location]");
+    if (locationControl) {
+      const location = locationControl.getAttribute("data-ov-location");
+      if (OVERVIEW_LOCATION_LABELS[location]) {
+        ST.ovlocation = location;
+        viewFleet();
+      }
       return;
     }
     const closeb = e.target.closest("[data-close]");
