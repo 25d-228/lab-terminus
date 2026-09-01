@@ -12,6 +12,24 @@
   const GPU_HISTORY_SAMPLES = 48;
   const NETWORK_HISTORY_SAMPLES = 48;
   const PROCESS_SCOPE_LABELS = { mine: "Mine", others: "Others", root: "Root" };
+  const MONITOR_SECTION_ORDER = [
+    "gpus",
+    "network",
+    "gpu-processes",
+    "top-processes",
+    "host",
+    "utilization",
+    "vram",
+  ];
+  const MONITOR_SECTION_LABELS = {
+    gpus: "GPUs",
+    network: "Network",
+    "gpu-processes": "GPU processes",
+    "top-processes": "Top processes",
+    host: "Host",
+    utilization: "Utilization",
+    vram: "VRAM",
+  };
   function esc(s) {
     const div = document.createElement("div");
     div.textContent = s == null ? "" : String(s);
@@ -108,6 +126,10 @@
     procOpen: {},
     chart: null,
     monTimer: null,
+    monitorOrder: MONITOR_SECTION_ORDER.slice(),
+    monitorDrag: null,
+    monitorRenderPending: false,
+    monitorFocusSection: null,
   };
 
   let toastT;
@@ -1499,6 +1521,54 @@
   }
 
   /* ---------------- monitor (availability · trends · processes · vitals) ---------------- */
+  function monitorAnnouncementRegion() {
+    let region = $("lt-monitor-announcement");
+    if (!region) {
+      region = document.createElement("div");
+      region.id = "lt-monitor-announcement";
+      region.className = "lt-sr-only";
+      region.setAttribute("role", "status");
+      region.setAttribute("aria-live", "polite");
+      region.setAttribute("aria-atomic", "true");
+      (document.querySelector(".lt-window") || document.body).appendChild(region);
+    }
+    return region;
+  }
+  function renderedMonitorSectionIds() {
+    return [...document.querySelectorAll("#lt-view [data-monitor-section]")].map((section) =>
+      section.getAttribute("data-monitor-section"),
+    );
+  }
+  function moveMonitorSection(sectionId, targetId, placeAfter) {
+    if (sectionId === targetId) return false;
+    const order = ST.monitorOrder.slice(),
+      sourceIndex = order.indexOf(sectionId);
+    if (sourceIndex < 0 || order.indexOf(targetId) < 0) return false;
+    order.splice(sourceIndex, 1);
+    const targetIndex = order.indexOf(targetId);
+    order.splice(targetIndex + (placeAfter ? 1 : 0), 0, sectionId);
+    if (order.every((value, index) => value === ST.monitorOrder[index])) return false;
+    ST.monitorOrder = order;
+    return true;
+  }
+  function monitorSectionHtml(sectionId, section, position, total) {
+    const label = MONITOR_SECTION_LABELS[sectionId],
+      headingClass = section.headingClass ? " " + section.headingClass : "",
+      handleLabel = `${label}, position ${position} of ${total}. Alt plus Up or Down Arrow moves this section.`;
+    return (
+      `<section class="lt-monitor-section" data-monitor-section="${sectionId}">` +
+      `<div class="lt-mhd${headingClass}">` +
+      `<button type="button" class="lt-monitor-drag-handle" draggable="true" data-monitor-drag-handle="${sectionId}" aria-label="${handleLabel}" title="Drag to reorder · Alt+Arrow to move">` +
+      ph("dots-six-vertical") +
+      `</button>` +
+      `<b>${label}</b>` +
+      `<span class="ln"></span>` +
+      (section.headingExtra || "") +
+      `</div>` +
+      section.body +
+      `</section>`
+    );
+  }
   function processState(id) {
     if (!ST.process[id]) {
       const status = FLEET[id];
@@ -1709,6 +1779,10 @@
       server = byId[id],
       fleet = FLEET[id];
     const view = $("lt-view");
+    if (ST.monitorDrag) {
+      ST.monitorRenderPending = true;
+      return;
+    }
     const focusedScopeControl =
       document.activeElement && document.activeElement.closest
         ? document.activeElement.closest("[data-process-scope]")
@@ -1716,6 +1790,16 @@
     const focusedScope = focusedScopeControl
       ? focusedScopeControl.getAttribute("data-process-scope")
       : null;
+    const focusedHandleControl =
+      document.activeElement && document.activeElement.closest
+        ? document.activeElement.closest("[data-monitor-drag-handle]")
+        : null;
+    const focusedHandle =
+      ST.monitorFocusSection ||
+      (focusedHandleControl
+        ? focusedHandleControl.getAttribute("data-monitor-drag-handle")
+        : null);
+    ST.monitorFocusSection = null;
     view.className = "lt-view pad";
     if (!fleet) {
       view.innerHTML = '<div class="lt-empty">Connecting…</div>';
@@ -1730,18 +1814,19 @@
       GB = (m) => m / 1024;
     const bar = (p, tone, extra) =>
       `<span class="lt-bar"><span class="lt-fill ${tone.startsWith("lt-chart-") ? tone : "lt-tone-" + tone}" style="width:${clampPct(p)}%"></span>${extra || ""}</span>`;
+    const sections = {};
     let html = '<div class="lt-mon">';
     /* availability strip — free VRAM is the hero */
     if (gpuList.length) {
       const free = gpuList.filter((gpu) => gpu.util < 10 && pct(gpu.mu, gpu.mt) < 10).length;
-      html += `<div class="lt-mhd"><b>GPUs</b><span class="ln"></span><span class="cnt">${free}/${gpuList.length} free</span></div><div class="lt-avail">`;
+      let body = '<div class="lt-avail">';
       gpuList.forEach((gpu, i) => {
         const ix = gpuIndex(gpu, i),
           mp = pct(gpu.mu, gpu.mt),
           fGB = GB(gpu.mt - gpu.mu),
           isFree = gpu.util < 10 && mp < 10,
           memoryTone = utilizationTone(mp);
-        html +=
+        body +=
           `<div class="lt-av${isFree ? " free" : ""}"><div class="lt-av-top"><span class="lt-av-ix ${chartTone(ix)}">GPU ${ix}</span><span class="lt-av-model">${esc(gpu.name)}</span><span class="lt-av-t lt-tone-${temperatureTone(gpu.temp)}">${gpu.temp}°C</span></div>` +
           `<div class="lt-av-free"><b class="lt-tone-${isFree ? "online" : memoryTone}">${fGB.toFixed(1)}</b><span>GB free</span>${isFree ? '<span class="lt-av-pill">FREE</span>' : `<em>${gpu.util}% util</em>`}</div>` +
           bar(
@@ -1751,9 +1836,15 @@
           ) +
           `<div class="lt-av-sub"><span>${GB(gpu.mu).toFixed(1)} / ${GB(gpu.mt).toFixed(0)} GB</span><span>${Math.round(gpu.pow)}/${gpu.plim} W</span></div></div>`;
       });
-      html += "</div>";
+      body += "</div>";
+      sections.gpus = {
+        headingExtra: `<span class="cnt">${free}/${gpuList.length} free</span>`,
+        body,
+      };
     } else if (server.kind !== "nas") {
-      html += `<div class="lt-mhd"><b>GPUs</b><span class="ln"></span></div><div class="lt-note">No GPU on this host — CPU server · ${fleet.ncpu || "?"} cores · load ${fleet.load ? fleet.load[0] : "?"}</div>`;
+      sections.gpus = {
+        body: `<div class="lt-note">No GPU on this host — CPU server · ${fleet.ncpu || "?"} cores · load ${fleet.load ? fleet.load[0] : "?"}</div>`,
+      };
     }
     /* aggregate network throughput */
     if (server.kind !== "nas") {
@@ -1774,10 +1865,13 @@
           : collecting
             ? "Collecting…"
             : bytes(network.rate.tx) + "/s";
-      html +=
-        `<div class="lt-mhd"><b>Network</b><span class="ln"></span><span class="cnt">${spanLabel}</span></div><div class="lt-network">` +
-        `<div class="lt-net-card"><div class="lt-net-top"><span>Receive</span><b class="${network.rate ? "lt-chart-tone-1" : "lt-tone-muted"}">${receiveLabel}</b></div>${networkSparkline(network.rx, "lt-chart-tone-1")}</div>` +
-        `<div class="lt-net-card"><div class="lt-net-top"><span>Transmit</span><b class="${network.rate ? "lt-chart-tone-2" : "lt-tone-muted"}">${transmitLabel}</b></div>${networkSparkline(network.tx, "lt-chart-tone-2")}</div></div>`;
+      sections.network = {
+        headingExtra: `<span class="cnt">${spanLabel}</span>`,
+        body:
+          `<div class="lt-network">` +
+          `<div class="lt-net-card"><div class="lt-net-top"><span>Receive</span><b class="${network.rate ? "lt-chart-tone-1" : "lt-tone-muted"}">${receiveLabel}</b></div>${networkSparkline(network.rx, "lt-chart-tone-1")}</div>` +
+          `<div class="lt-net-card"><div class="lt-net-top"><span>Transmit</span><b class="${network.rate ? "lt-chart-tone-2" : "lt-tone-muted"}">${transmitLabel}</b></div>${networkSparkline(network.tx, "lt-chart-tone-2")}</div></div>`,
+      };
     }
     /* general processes */
     if (server.kind !== "nas") {
@@ -1797,17 +1891,17 @@
           : process.error
             ? "Error"
             : `${scopeLabel} · ${topProcs.length}`;
-      html += `<div class="lt-mhd lt-process-heading"><b>Top processes</b><span class="ln"></span><div class="lt-proc-scopes" role="group" aria-label="Process owner scope">${scopeControls}</div><span class="cnt">${countLabel}</span></div><div class="lt-panel"><div class="lt-proc-h lt-top-proc-h"><span>USER</span><span>PID</span><span>CPU</span><span>MEM</span><span>RSS</span><span>TIME</span><span>COMMAND</span></div>`;
+      let body = `<div class="lt-panel"><div class="lt-proc-h lt-top-proc-h"><span>USER</span><span>PID</span><span>CPU</span><span>MEM</span><span>RSS</span><span>TIME</span><span>COMMAND</span></div>`;
       if (process.loading) {
-        html += `<div class="lt-proc-empty" role="status" aria-live="polite">Loading ${scopeLabel} processes…</div>`;
+        body += `<div class="lt-proc-empty" role="status" aria-live="polite">Loading ${scopeLabel} processes…</div>`;
       } else if (process.error) {
-        html += `<div class="lt-proc-empty lt-proc-error" role="alert">Could not load ${scopeLabel} processes. ${esc(process.error)}</div>`;
+        body += `<div class="lt-proc-empty lt-proc-error" role="alert">Could not load ${scopeLabel} processes. ${esc(process.error)}</div>`;
       } else if (topProcs.length) {
         topProcs.forEach((proc, procIndex) => {
           const procKey = "top:" + process.scope + ":" + proc.pid,
             cpuPct = Number(proc.cpu_pct),
             memoryPct = Number(proc.memory_pct);
-          html +=
+          body +=
             `<div class="lt-proc lt-top-proc${process.scope === "mine" ? " me" : ""}${ST.procOpen[procKey] ? " open" : ""}" data-proc-key="${procKey}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-cpu">${Number.isFinite(cpuPct) ? cpuPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-pct">${Number.isFinite(memoryPct) ? memoryPct.toFixed(1) + "%" : "—"}</span><span class="lt-proc-rss">${bytes(proc.resident_bytes) || "—"}</span><span class="lt-proc-time">${esc(proc.elapsed || "")}</span><span class="lt-proc-cmd" title="${esc(proc.command || "")}">${esc(proc.command || "")}</span></div>` +
             (ST.procOpen[procKey]
               ? `<div class="lt-proc-full">${esc(proc.command || "")}</div>`
@@ -1820,24 +1914,33 @@
             : process.scope === "others"
               ? "No processes owned by other non-root accounts."
               : "No root-owned processes.";
-        html += `<div class="lt-proc-empty">${emptyMessage}</div>`;
+        body += `<div class="lt-proc-empty">${emptyMessage}</div>`;
       }
-      html += "</div>";
+      body += "</div>";
+      sections["top-processes"] = {
+        headingClass: "lt-process-heading",
+        headingExtra: `<div class="lt-proc-scopes" role="group" aria-label="Process owner scope">${scopeControls}</div><span class="cnt">${countLabel}</span>`,
+        body,
+      };
     }
     /* GPU processes */
     if (server.kind !== "nas") {
       const procs = (fleet.procs || []).slice().sort((a, b) => (b.mem || 0) - (a.mem || 0));
-      html += `<div class="lt-mhd"><b>GPU processes</b><span class="ln"></span><span class="cnt">${procs.length}</span></div><div class="lt-panel"><div class="lt-proc-h"><span>USER</span><span>PID</span><span>GPU</span><span>VRAM</span><span>TIME</span><span>COMMAND</span></div>`;
+      let body = `<div class="lt-panel"><div class="lt-proc-h"><span>USER</span><span>PID</span><span>GPU</span><span>VRAM</span><span>TIME</span><span>COMMAND</span></div>`;
       if (procs.length)
         procs.forEach((proc, procIndex) => {
           const procKey = "gpu:" + proc.pid;
-          html +=
+          body +=
             `<div class="lt-proc${proc.user === server.user ? " me" : ""}${ST.procOpen[procKey] ? " open" : ""}" data-proc-key="${procKey}"><span class="lt-proc-u"><i class="${chartTone(procIndex)}"></i>${esc(proc.user)}</span><span class="lt-proc-pid">${proc.pid}</span><span class="lt-proc-gpu">${proc.gpu}</span><span class="lt-proc-mem">${GB(proc.mem).toFixed(1)} GB</span><span class="lt-proc-time">${esc(proc.etime || "")}</span><span class="lt-proc-cmd" title="${esc(proc.cmd || "")}">${esc(proc.cmd || "")}</span></div>` +
             (ST.procOpen[procKey] ? `<div class="lt-proc-full">${esc(proc.cmd || "")}</div>` : "");
         });
       else
-        html += `<div class="lt-proc-empty">No GPU processes${gpuList.length ? " — GPUs idle, or other users’ jobs not visible" : ""}.</div>`;
-      html += "</div>";
+        body += `<div class="lt-proc-empty">No GPU processes${gpuList.length ? " — GPUs idle, or other users’ jobs not visible" : ""}.</div>`;
+      body += "</div>";
+      sections["gpu-processes"] = {
+        headingExtra: `<span class="cnt">${procs.length}</span>`,
+        body,
+      };
     }
     /* host vitals (bullet bars) */
     const bl = (label, val, p, c, sub) =>
@@ -1876,7 +1979,15 @@
     let uptimeLabel = "";
     if (server.kind === "nas") uptimeLabel = "volume";
     else if (fleet.up) uptimeLabel = "up " + fleet.up;
-    html += `<div class="lt-mhd"><b>Host${server.kind === "nas" ? " · storage" : ""}</b><span class="ln"></span><span class="cnt">${uptimeLabel}</span></div><div class="lt-vitals">${vitals || '<div class="lt-proc-empty">No vitals reported.</div>'}</div>`;
+    const hostBody = `<div class="lt-vitals">${vitals || '<div class="lt-proc-empty">No vitals reported.</div>'}</div>`;
+    if (server.kind === "nas") {
+      html += `<div class="lt-mhd"><b>Host · storage</b><span class="ln"></span><span class="cnt">${uptimeLabel}</span></div>${hostBody}`;
+    } else {
+      sections.host = {
+        headingExtra: `<span class="cnt">${uptimeLabel}</span>`,
+        body: hostBody,
+      };
+    }
     /* trends (history) at the bottom */
     if (gpuList.length) {
       const mk = (which) =>
@@ -1900,12 +2011,29 @@
         }),
       );
       const mins = Math.round(((span * 2) / 60) * 10) / 10;
-      html += `<div class="lt-mhd"><b>Utilization</b><span class="ln"></span><span class="cnt">% · last ${span < 2 ? "now" : mins + " min"}</span></div>${lineChart(utilSeries, null, "u")}`;
-      html += `<div class="lt-mhd"><b>VRAM</b><span class="ln"></span><span class="cnt">% of total · 90% danger</span></div>${lineChart(vramSeries, 90, "m")}`;
+      sections.utilization = {
+        headingExtra: `<span class="cnt">% · last ${span < 2 ? "now" : mins + " min"}</span>`,
+        body: lineChart(utilSeries, null, "u"),
+      };
+      sections.vram = {
+        headingExtra: '<span class="cnt">% of total · 90% danger</span>',
+        body: lineChart(vramSeries, 90, "m"),
+      };
+    }
+    if (server.kind !== "nas") {
+      const renderedOrder = ST.monitorOrder.filter((sectionId) => sections[sectionId]);
+      html += renderedOrder
+        .map((sectionId, index) =>
+          monitorSectionHtml(sectionId, sections[sectionId], index + 1, renderedOrder.length),
+        )
+        .join("");
     }
     html += "</div>";
     view.innerHTML = html;
-    if (focusedScope) {
+    if (focusedHandle) {
+      const handle = view.querySelector(`[data-monitor-drag-handle="${focusedHandle}"]`);
+      if (handle) handle.focus();
+    } else if (focusedScope) {
       const control = view.querySelector(`[data-process-scope="${focusedScope}"]`);
       if (control) control.focus();
     }
@@ -1944,6 +2072,75 @@
       startMon();
     }
   }
+  function clearMonitorDropIndicator() {
+    document
+      .querySelectorAll("#lt-view .lt-monitor-drop-before, #lt-view .lt-monitor-drop-after")
+      .forEach((section) =>
+        section.classList.remove("lt-monitor-drop-before", "lt-monitor-drop-after"),
+      );
+  }
+  function visibleMonitorOrder(renderedIds) {
+    const rendered = new Set(renderedIds);
+    return ST.monitorOrder.filter((sectionId) => rendered.has(sectionId));
+  }
+  function announceMonitorMove(sectionId, renderedIds) {
+    const order = visibleMonitorOrder(renderedIds),
+      position = order.indexOf(sectionId) + 1;
+    monitorAnnouncementRegion().textContent =
+      `${MONITOR_SECTION_LABELS[sectionId]} moved to position ${position} of ${order.length}.`;
+  }
+  function finishMonitorDrag() {
+    if (!ST.monitorDrag) return;
+    const shouldRender = ST.monitorRenderPending || ST.monitorDrag.orderChanged;
+    const dragged = document.querySelector("#lt-view .lt-monitor-section.lt-monitor-dragging");
+    if (dragged) dragged.classList.remove("lt-monitor-dragging");
+    clearMonitorDropIndicator();
+    ST.monitorDrag = null;
+    ST.monitorRenderPending = false;
+    if (shouldRender && ST.view === "server" && ST.tab === "monitor") viewMonitor();
+  }
+  document.addEventListener("dragstart", (event) => {
+    const handle = event.target.closest && event.target.closest("[data-monitor-drag-handle]");
+    if (!handle) return;
+    const sectionId = handle.getAttribute("data-monitor-drag-handle"),
+      section = handle.closest("[data-monitor-section]");
+    if (!section || section.getAttribute("data-monitor-section") !== sectionId) return;
+    ST.monitorDrag = { sectionId, targetId: null, placeAfter: false };
+    section.classList.add("lt-monitor-dragging");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-lab-terminus-monitor-section", sectionId);
+  });
+  document.addEventListener("dragover", (event) => {
+    if (!ST.monitorDrag) return;
+    const section = event.target.closest && event.target.closest("[data-monitor-section]");
+    clearMonitorDropIndicator();
+    ST.monitorDrag.targetId = null;
+    if (!section) return;
+    const targetId = section.getAttribute("data-monitor-section");
+    if (targetId === ST.monitorDrag.sectionId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const rect = section.getBoundingClientRect(),
+      placeAfter = event.clientY >= rect.top + rect.height / 2;
+    section.classList.add(placeAfter ? "lt-monitor-drop-after" : "lt-monitor-drop-before");
+    ST.monitorDrag.targetId = targetId;
+    ST.monitorDrag.placeAfter = placeAfter;
+  });
+  document.addEventListener("drop", (event) => {
+    if (!ST.monitorDrag) return;
+    const section = event.target.closest && event.target.closest("[data-monitor-section]"),
+      targetId = section && section.getAttribute("data-monitor-section"),
+      renderedIds = renderedMonitorSectionIds();
+    if (targetId && targetId === ST.monitorDrag.targetId) {
+      event.preventDefault();
+      if (moveMonitorSection(ST.monitorDrag.sectionId, targetId, ST.monitorDrag.placeAfter)) {
+        ST.monitorDrag.orderChanged = true;
+        announceMonitorMove(ST.monitorDrag.sectionId, renderedIds);
+      }
+    }
+    finishMonitorDrag();
+  });
+  document.addEventListener("dragend", finishMonitorDrag);
   /* chart hover tooltip */
   function ensureChartTip() {
     const windowEl = document.querySelector(".lt-window") || document.body;
@@ -2300,6 +2497,30 @@
     }
   });
   document.addEventListener("keydown", (e) => {
+    if (ST.monitorDrag && e.key === "Escape") {
+      e.preventDefault();
+      finishMonitorDrag();
+      return;
+    }
+    const monitorHandle =
+      e.target.closest && e.target.closest("[data-monitor-drag-handle]");
+    if (monitorHandle && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      const sectionId = monitorHandle.getAttribute("data-monitor-drag-handle"),
+        renderedIds = renderedMonitorSectionIds(),
+        currentIndex = renderedIds.indexOf(sectionId),
+        direction = e.key === "ArrowUp" ? -1 : 1,
+        targetId = renderedIds[currentIndex + direction];
+      if (
+        targetId &&
+        moveMonitorSection(sectionId, targetId, direction > 0)
+      ) {
+        announceMonitorMove(sectionId, renderedIds);
+        ST.monitorFocusSection = sectionId;
+        viewMonitor();
+      }
+      return;
+    }
     if (
       (e.key === "Enter" || e.key === " ") &&
       e.target.matches &&
@@ -2377,6 +2598,7 @@
   }
   async function init() {
     applyTheme();
+    monitorAnnouncementRegion();
     try {
       ST.collapsed = JSON.parse(localStorage.getItem("lt-collapsed") || "{}") || {};
     } catch (e) {}
