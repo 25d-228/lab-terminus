@@ -12,7 +12,6 @@
   const GPU_HISTORY_SAMPLES = 48;
   const NETWORK_HISTORY_SAMPLES = 48;
   const PROCESS_SCOPE_LABELS = { mine: "Mine", others: "Others", root: "Root" };
-  const OVERVIEW_LOCATION_LABELS = { all: "All", local: "Local", remote: "Remote" };
   const MONITOR_SECTION_ORDER = [
     "gpus",
     "network",
@@ -114,7 +113,7 @@
     filter: "",
     ovq: "",
     ovmode: "grid",
-    ovlocation: "all",
+    ovgroup: null,
     termTabs: {},
     termActive: {},
     broadcast: false,
@@ -240,6 +239,9 @@
       const [servers, folders] = await Promise.all([api("/api/servers"), api("/api/folders")]);
       SERVERS = servers;
       FOLDERS = folders;
+      if (ST.ovgroup !== null && !FOLDERS.some((folder) => folder.key === ST.ovgroup)) {
+        ST.ovgroup = null;
+      }
       byId = Object.fromEntries(SERVERS.map((server) => [server.id, server]));
       if (ST.active && !byId[ST.active]) {
         ST.view = "fleet";
@@ -247,8 +249,10 @@
         ST.sel = null;
         ST.listing = null;
         renderAll();
+        return;
       } // the open server was removed (e.g. config hand-edit)
       renderSide();
+      if (ST.view === "fleet") viewFleet();
     } catch (e) {}
   }
   /* add server / folder modal */
@@ -701,23 +705,21 @@
         : `<span class="lt-htag">${esc(s.gpuLabel || s.kind)}</span>`;
     return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.statusText)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
   }
-  function matchesOverviewLocation(server) {
-    if (ST.ovlocation === "local") return server.kind === "wsl";
-    if (ST.ovlocation === "remote") return server.kind === "ssh" || server.kind === "nas";
-    return true;
-  }
   function viewFleet() {
-    const focusedLocationControl =
+    const focusedGroupControl =
       document.activeElement && document.activeElement.closest
-        ? document.activeElement.closest("[data-ov-location]")
+        ? document.activeElement.closest("[data-ov-group-control]")
         : null;
-    const focusedLocation = focusedLocationControl
-      ? focusedLocationControl.getAttribute("data-ov-location")
-      : null;
+    const focusedGroup = focusedGroupControl
+      ? focusedGroupControl.getAttribute("data-ov-group")
+      : null,
+      focusedSearch = document.activeElement && document.activeElement.id === "lt-ovsearch",
+      searchSelectionStart = focusedSearch ? document.activeElement.selectionStart : null,
+      searchSelectionEnd = focusedSearch ? document.activeElement.selectionEnd : null;
     const query = (ST.ovq || "").toLowerCase();
     const list = SERVERS.filter(
       (s) =>
-        matchesOverviewLocation(s) &&
+        (ST.ovgroup === null || (s.group || "lab") === ST.ovgroup) &&
         (!query ||
           (s.name + " " + s.host + " " + (s.gpuLabel || "")).toLowerCase().includes(query)),
     );
@@ -726,25 +728,25 @@
         list.length === SERVERS.length
           ? `${SERVERS.length} machines`
           : `${list.length}/${SERVERS.length} machines`,
-      locationControls = Object.entries(OVERVIEW_LOCATION_LABELS)
-        .map(
-          ([location, label]) =>
-            `<button type="button" class="${ST.ovlocation === location ? "on" : ""}" data-ov-location="${location}" aria-pressed="${ST.ovlocation === location}">${label}</button>`,
-        )
-        .join("");
+      groupControls = [
+        `<button type="button" class="${ST.ovgroup === null ? "on" : ""}" data-ov-group-control aria-pressed="${ST.ovgroup === null}">All</button>`,
+        ...FOLDERS.map(
+          (folder) =>
+            `<button type="button" class="${ST.ovgroup === folder.key ? "on" : ""}" data-ov-group-control data-ov-group="${esc(folder.key)}" aria-pressed="${ST.ovgroup === folder.key}">${esc(folder.title)}</button>`,
+        ),
+      ].join("");
     let html =
       `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${countLabel} · key auth</span>` +
-      `<div class="lt-ovloc" role="group" aria-label="Host location">${locationControls}</div>` +
+      `<div class="lt-ovgroup" role="group" aria-label="Host group">${groupControls}</div>` +
       `<div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" role="button" tabindex="0" aria-label="Grid view" aria-pressed="${mode === "grid"}" title="Grid view">${ph("squares-four")}</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" role="button" tabindex="0" aria-label="List view" aria-pressed="${mode === "list"}" title="List view">${ph("list")}</span></div>` +
       `<input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
     if (!list.length) {
-      const locationLabel = OVERVIEW_LOCATION_LABELS[ST.ovlocation].toLowerCase();
+      const selectedFolder = FOLDERS.find((folder) => folder.key === ST.ovgroup);
       let emptyMessage;
-      if (query && ST.ovlocation !== "all")
-        emptyMessage = `No ${locationLabel} hosts match “${ST.ovq}”.`;
+      if (query && selectedFolder)
+        emptyMessage = `No hosts in “${selectedFolder.title}” match “${ST.ovq}”.`;
       else if (query) emptyMessage = `No hosts match “${ST.ovq}”.`;
-      else if (ST.ovlocation !== "all")
-        emptyMessage = `No ${locationLabel} hosts match this location filter.`;
+      else if (selectedFolder) emptyMessage = `No hosts in “${selectedFolder.title}”.`;
       else emptyMessage = "No hosts configured.";
       html += `<div class="lt-empty">${esc(emptyMessage)}</div>`;
     } else if (mode === "list")
@@ -753,9 +755,20 @@
     const viewEl = $("lt-view");
     viewEl.className = "lt-view pad";
     viewEl.innerHTML = html;
-    if (focusedLocation) {
-      const control = viewEl.querySelector(`[data-ov-location="${focusedLocation}"]`);
+    if (focusedGroupControl) {
+      const controls = Array.from(viewEl.querySelectorAll("[data-ov-group-control]"));
+      const control =
+        controls.find((candidate) => candidate.getAttribute("data-ov-group") === focusedGroup) ||
+        controls.find((candidate) =>
+          ST.ovgroup === null
+            ? !candidate.hasAttribute("data-ov-group")
+            : candidate.getAttribute("data-ov-group") === ST.ovgroup,
+        );
       if (control) control.focus();
+    } else if (focusedSearch) {
+      const search = $("lt-ovsearch");
+      search.focus();
+      search.setSelectionRange(searchSelectionStart, searchSelectionEnd);
     }
   }
 
@@ -2355,11 +2368,11 @@
       viewFleet();
       return;
     }
-    const locationControl = e.target.closest("[data-ov-location]");
-    if (locationControl) {
-      const location = locationControl.getAttribute("data-ov-location");
-      if (OVERVIEW_LOCATION_LABELS[location]) {
-        ST.ovlocation = location;
+    const groupControl = e.target.closest("[data-ov-group-control]");
+    if (groupControl) {
+      const group = groupControl.getAttribute("data-ov-group");
+      if (group === null || FOLDERS.some((folder) => folder.key === group)) {
+        ST.ovgroup = group;
         viewFleet();
       }
       return;

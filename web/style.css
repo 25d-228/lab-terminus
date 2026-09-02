@@ -147,20 +147,24 @@ html.lt-mac .lt-titlebar{padding-left:100px}
 .lt-view.pad{padding:14px;background:var(--background)}
 
 /* Host overview. */
-.lt-ovh{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+.lt-ovh{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-bottom:12px}
 .lt-ovh h3{margin:0;color:var(--foreground);font-family:var(--font-heading);font-weight:650;font-size:17px;letter-spacing:-.015em}
 .lt-ovh .ct{font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground)}
-.lt-ovloc {
+.lt-ovgroup {
   display: flex;
-  flex: none;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   gap: 2px;
+  min-width: 0;
+  max-width: 100%;
   padding: 2px;
   border: 1px solid var(--input);
   border-radius: var(--radius-md);
   background: var(--background);
 }
 
-.lt-ovloc button {
+.lt-ovgroup button {
+  max-width: 100%;
   min-height: 26px;
   padding: 0 9px;
   border: 0;
@@ -169,15 +173,16 @@ html.lt-mac .lt-titlebar{padding-left:100px}
   color: var(--muted-foreground);
   font-family: var(--font-sans);
   font-size: 10px;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
-.lt-ovloc button:hover {
+.lt-ovgroup button:hover {
   background: var(--accent);
   color: var(--accent-foreground);
 }
 
-.lt-ovloc button.on {
+.lt-ovgroup button.on {
   background: var(--accent);
   color: var(--accent-foreground);
   font-weight: 600;
