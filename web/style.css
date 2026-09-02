@@ -147,9 +147,47 @@ html.lt-mac .lt-titlebar{padding-left:100px}
 .lt-view.pad{padding:14px;background:var(--background)}
 
 /* Host overview. */
-.lt-ovh{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+.lt-ovh{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-bottom:12px}
 .lt-ovh h3{margin:0;color:var(--foreground);font-family:var(--font-heading);font-weight:650;font-size:17px;letter-spacing:-.015em}
 .lt-ovh .ct{font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground)}
+.lt-ovgroup {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--background);
+}
+
+.lt-ovgroup button {
+  max-width: 100%;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.lt-ovgroup button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.lt-ovgroup button.on {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 600;
+}
+
 .lt-ovsearch,.lt-filter,.lt-find input,.lt-f-in{color:var(--foreground);background:var(--background);border:1px solid var(--input);border-radius:var(--radius-md);font-family:var(--font-sans);outline:none}
 .lt-ovsearch{margin-left:0;width:202px;min-height:32px;padding:5px 9px;font-size:11px}
 .lt-ovsearch::placeholder,.lt-filter::placeholder,.lt-find input::placeholder,.lt-f-in::placeholder{color:var(--muted-foreground)}

@@ -113,6 +113,7 @@
     filter: "",
     ovq: "",
     ovmode: "grid",
+    ovgroup: null,
     termTabs: {},
     termActive: {},
     broadcast: false,
@@ -238,6 +239,9 @@
       const [servers, folders] = await Promise.all([api("/api/servers"), api("/api/folders")]);
       SERVERS = servers;
       FOLDERS = folders;
+      if (ST.ovgroup !== null && !FOLDERS.some((folder) => folder.key === ST.ovgroup)) {
+        ST.ovgroup = null;
+      }
       byId = Object.fromEntries(SERVERS.map((server) => [server.id, server]));
       if (ST.active && !byId[ST.active]) {
         ST.view = "fleet";
@@ -245,8 +249,10 @@
         ST.sel = null;
         ST.listing = null;
         renderAll();
+        return;
       } // the open server was removed (e.g. config hand-edit)
       renderSide();
+      if (ST.view === "fleet") viewFleet();
     } catch (e) {}
   }
   /* add server / folder modal */
@@ -301,6 +307,27 @@
         toast("Folder removed");
       })
       .catch(() => toast("Could not remove folder"));
+  }
+  async function selectOverviewGroup(group) {
+    if (selectOverviewGroup._busy || (group !== null && group === ST.ovgroup)) return;
+    selectOverviewGroup._busy = true;
+    try {
+      const preference = await api("/api/preferences/overview-group", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group }),
+      });
+      const confirmedGroup =
+        preference && typeof preference.group === "string" ? preference.group : null;
+      if (confirmedGroup !== group) throw new Error("saved group did not match the selection");
+      ST.ovgroup = confirmedGroup;
+      if (ST.view === "fleet") viewFleet();
+    } catch (error) {
+      if (ST.view === "fleet") viewFleet();
+      toast("Could not save Overview group: " + (error.message || error));
+    } finally {
+      selectOverviewGroup._busy = false;
+    }
   }
   function closeCtx() {
     const menu = $("lt-ctx");
@@ -700,20 +727,70 @@
     return `<div class="lt-hrow" data-sv="${s.id}"><span class="lt-hicon sm">${esc(meta.code)}<span class="lt-st ${statusDot(meta.status)}"></span></span><div class="lt-rmeta"><span class="lt-hname">${esc(s.name)}</span><span class="lt-haddr">${esc(meta.addr)}</span></div><span class="lt-rstat">${esc(meta.statusText)}</span>${tag}<span class="lt-hgo2">Open →</span></div>`;
   }
   function viewFleet() {
+    const focusedGroupControl =
+      document.activeElement && document.activeElement.closest
+        ? document.activeElement.closest("[data-ov-group-control]")
+        : null;
+    const focusedGroup = focusedGroupControl
+      ? focusedGroupControl.getAttribute("data-ov-group")
+      : null,
+      focusedSearch = document.activeElement && document.activeElement.id === "lt-ovsearch",
+      searchSelectionStart = focusedSearch ? document.activeElement.selectionStart : null,
+      searchSelectionEnd = focusedSearch ? document.activeElement.selectionEnd : null;
     const query = (ST.ovq || "").toLowerCase();
     const list = SERVERS.filter(
       (s) =>
-        !query || (s.name + " " + s.host + " " + (s.gpuLabel || "")).toLowerCase().includes(query),
+        (ST.ovgroup === null || (s.group || "lab") === ST.ovgroup) &&
+        (!query ||
+          (s.name + " " + s.host + " " + (s.gpuLabel || "")).toLowerCase().includes(query)),
     );
-    const mode = ST.ovmode === "list" ? "list" : "grid";
-    let html = `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${SERVERS.length} machines · key auth</span><div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" role="button" tabindex="0" aria-label="Grid view" aria-pressed="${mode === "grid"}" title="Grid view">${ph("squares-four")}</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" role="button" tabindex="0" aria-label="List view" aria-pressed="${mode === "list"}" title="List view">${ph("list")}</span></div><input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
-    if (!list.length) html += `<div class="lt-empty">No hosts match “${esc(ST.ovq)}”.</div>`;
-    else if (mode === "list")
+    const mode = ST.ovmode === "list" ? "list" : "grid",
+      countLabel =
+        list.length === SERVERS.length
+          ? `${SERVERS.length} machines`
+          : `${list.length}/${SERVERS.length} machines`,
+      groupControls = [
+        `<button type="button" class="${ST.ovgroup === null ? "on" : ""}" data-ov-group-control aria-pressed="${ST.ovgroup === null}">All</button>`,
+        ...FOLDERS.map(
+          (folder) =>
+            `<button type="button" class="${ST.ovgroup === folder.key ? "on" : ""}" data-ov-group-control data-ov-group="${esc(folder.key)}" aria-pressed="${ST.ovgroup === folder.key}">${esc(folder.title)}</button>`,
+        ),
+      ].join("");
+    let html =
+      `<div class="lt-ovh"><h3>Hosts</h3><span class="ct">${countLabel} · key auth</span>` +
+      `<div class="lt-ovgroup" role="group" aria-label="Host group">${groupControls}</div>` +
+      `<div class="lt-vtog"><span class="lt-vbtn${mode === "grid" ? " on" : ""}" data-ov="grid" role="button" tabindex="0" aria-label="Grid view" aria-pressed="${mode === "grid"}" title="Grid view">${ph("squares-four")}</span><span class="lt-vbtn${mode === "list" ? " on" : ""}" data-ov="list" role="button" tabindex="0" aria-label="List view" aria-pressed="${mode === "list"}" title="List view">${ph("list")}</span></div>` +
+      `<input class="lt-ovsearch" id="lt-ovsearch" placeholder="Search hosts…" value="${esc(ST.ovq || "")}"></div>`;
+    if (!list.length) {
+      const selectedFolder = FOLDERS.find((folder) => folder.key === ST.ovgroup);
+      let emptyMessage;
+      if (query && selectedFolder)
+        emptyMessage = `No hosts in “${selectedFolder.title}” match “${ST.ovq}”.`;
+      else if (query) emptyMessage = `No hosts match “${ST.ovq}”.`;
+      else if (selectedFolder) emptyMessage = `No hosts in “${selectedFolder.title}”.`;
+      else emptyMessage = "No hosts configured.";
+      html += `<div class="lt-empty">${esc(emptyMessage)}</div>`;
+    } else if (mode === "list")
       html += '<div class="lt-hlist">' + list.map((s) => hostRow(s)).join("") + "</div>";
     else html += '<div class="lt-hgrid">' + list.map((s) => hostCard(s)).join("") + "</div>";
     const viewEl = $("lt-view");
     viewEl.className = "lt-view pad";
     viewEl.innerHTML = html;
+    if (focusedGroupControl) {
+      const controls = Array.from(viewEl.querySelectorAll("[data-ov-group-control]"));
+      const control =
+        controls.find((candidate) => candidate.getAttribute("data-ov-group") === focusedGroup) ||
+        controls.find((candidate) =>
+          ST.ovgroup === null
+            ? !candidate.hasAttribute("data-ov-group")
+            : candidate.getAttribute("data-ov-group") === ST.ovgroup,
+        );
+      if (control) control.focus();
+    } else if (focusedSearch) {
+      const search = $("lt-ovsearch");
+      search.focus();
+      search.setSelectionRange(searchSelectionStart, searchSelectionEnd);
+    }
   }
 
   /* ---------------- explorer ---------------- */
@@ -2312,6 +2389,14 @@
       viewFleet();
       return;
     }
+    const groupControl = e.target.closest("[data-ov-group-control]");
+    if (groupControl) {
+      const group = groupControl.getAttribute("data-ov-group");
+      if (group === null || FOLDERS.some((folder) => folder.key === group)) {
+        selectOverviewGroup(group);
+      }
+      return;
+    }
     const closeb = e.target.closest("[data-close]");
     if (closeb) {
       closeSession(closeb.getAttribute("data-close"));
@@ -2604,12 +2689,19 @@
     } catch (e) {}
     ST.ovmode = localStorage.getItem("lt-ovmode") || "grid";
     try {
-      const [serverList, folderList] = await Promise.all([
+      const [serverList, folderList, overviewPreference] = await Promise.all([
         api("/api/servers"),
         api("/api/folders"),
+        api("/api/preferences/overview-group"),
       ]);
       SERVERS = serverList;
       FOLDERS = folderList;
+      ST.ovgroup =
+        overviewPreference &&
+        typeof overviewPreference.group === "string" &&
+        FOLDERS.some((folder) => folder.key === overviewPreference.group)
+          ? overviewPreference.group
+          : null;
     } catch (e) {
       $("lt-view").innerHTML =
         '<div class="lt-empty">Backend not reachable — is the server running?<br>' +

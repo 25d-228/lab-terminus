@@ -29,6 +29,10 @@
 
 ## Machine safety and human verification
 
+- Executors must use the existing checkout when it is safe to do so.
+- If an alternate clone or Git worktree is required, create it only under the operating system temporary directory or a tool-managed temporary directory.
+- Do not create an alternate workspace beside the repository or under the repository's parent directory, including with a name such as `lab-terminus-issue-<number>`.
+- A temporary workspace must not contain the only copy of uncommitted work and should be removed when it is no longer needed.
 - Do not run an application build, package, or installation command unless a current controlling message explicitly authorizes it for the named task. Compilation performed by repository-native test or check commands remains validation, not installation authorization.
 - Do not launch, interact with, or control the application or other GUI software. Do not make persistent machine, user, privilege, or service changes.
 - Classify human verification as blocking only when required acceptance evidence cannot be obtained through authorized headless checks and requires human action. Record low-risk visual checks separately as deferred visual-verification items.
