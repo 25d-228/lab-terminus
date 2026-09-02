@@ -9,7 +9,7 @@
 //! The file is watched (mtime poll) and hot-reloaded; every change (file edit or panel
 //! mutation) bumps REV, which /api/fleet exposes so the frontend refreshes its registry.
 //! Unknown JSON fields are preserved via #[serde(flatten)] so hand-edits survive a save.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -80,12 +80,27 @@ pub struct Config {
     pub servers: Vec<Server>,
     #[serde(default)]
     pub folders: Vec<Folder>,
+    #[serde(
+        rename = "overviewGroup",
+        default,
+        deserialize_with = "deserialize_overview_group",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub overview_group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nas: Option<Nas>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl: Option<Wsl>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn deserialize_overview_group<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_str().map(str::to_owned))
 }
 
 // Sanitized default registry, used to seed the per-user config on first run.
@@ -265,6 +280,13 @@ fn normalize(mut cfg: Config) -> Config {
             extra: Default::default(),
         });
     }
+    if cfg
+        .overview_group
+        .as_ref()
+        .is_some_and(|key| !cfg.folders.iter().any(|folder| folder.key == *key))
+    {
+        cfg.overview_group = None;
+    }
     cfg
 }
 
@@ -438,25 +460,48 @@ pub fn rename_folder(key: &str, title: &str) -> Result<Folder, String> {
     })
 }
 
+fn remove_folder_from_config(cfg: &mut Config, key: &str) -> Result<(), String> {
+    if !cfg.folders.iter().any(|f| f.key == key) {
+        return Err("unknown folder".into());
+    }
+    cfg.folders.retain(|f| f.key != key);
+    // retain() may have removed several entries (hand-edited duplicate keys) —
+    // never leave zero folders, and never index an empty Vec.
+    let Some(first) = cfg.folders.first() else {
+        return Err("keep at least one folder".into());
+    };
+    let fallback = first.key.clone();
+    for s in &mut cfg.servers {
+        if s.group.as_deref() == Some(key) {
+            s.group = Some(fallback.clone());
+        }
+    }
+    if cfg.overview_group.as_deref() == Some(key) {
+        cfg.overview_group = None;
+    }
+    Ok(())
+}
+
 pub fn remove_folder(key: &str) -> Result<(), String> {
-    mutate(|cfg| {
-        if !cfg.folders.iter().any(|f| f.key == key) {
-            return Err("unknown folder".into());
-        }
-        cfg.folders.retain(|f| f.key != key);
-        // retain() may have removed several entries (hand-edited duplicate keys) —
-        // never leave zero folders, and never index an empty Vec.
-        let Some(first) = cfg.folders.first() else {
-            return Err("keep at least one folder".into());
-        };
-        let fallback = first.key.clone();
-        for s in &mut cfg.servers {
-            if s.group.as_deref() == Some(key) {
-                s.group = Some(fallback.clone());
-            }
-        }
-        Ok(())
-    })
+    mutate(|cfg| remove_folder_from_config(cfg, key))
+}
+
+fn update_overview_group(
+    cfg: &mut Config,
+    group: Option<String>,
+) -> Result<Option<String>, String> {
+    if group
+        .as_ref()
+        .is_some_and(|key| !cfg.folders.iter().any(|folder| folder.key == *key))
+    {
+        return Err("unknown folder".into());
+    }
+    cfg.overview_group = group.clone();
+    Ok(group)
+}
+
+pub fn set_overview_group(group: Option<String>) -> Result<Option<String>, String> {
+    mutate(|cfg| update_overview_group(cfg, group))
 }
 
 pub fn add_server(fields: &serde_json::Value) -> Result<Server, String> {
@@ -595,7 +640,91 @@ mod tests {
         assert!(config.servers.is_empty());
         assert!(config.nas.is_none());
         assert!(config.key.is_none());
+        assert!(config.overview_group.is_none());
         assert!(!contains_sensitive_field(&value));
+    }
+
+    #[test]
+    fn config_without_overview_group_defaults_to_all() {
+        let config = parse_config(r#"{"folders":[{"key":"lab","title":"Lab Servers"}]}"#)
+            .expect("config without a preference should parse");
+
+        assert!(config.overview_group.is_none());
+    }
+
+    #[test]
+    fn valid_overview_group_is_retained_and_serialized() {
+        let config = parse_config(
+            r#"{"folders":[{"key":"lab","title":"Lab Servers"}],"overviewGroup":"lab","futureSetting":{"enabled":true}}"#,
+        )
+        .expect("valid preference should parse");
+        let value = serde_json::to_value(&config).expect("config should serialize");
+
+        assert_eq!(config.overview_group.as_deref(), Some("lab"));
+        assert_eq!(value["overviewGroup"], "lab");
+        assert_eq!(value["futureSetting"]["enabled"], true);
+    }
+
+    #[test]
+    fn unknown_or_malformed_overview_group_resolves_to_all() {
+        for preference in [
+            serde_json::json!("missing"),
+            serde_json::json!(42),
+            serde_json::json!({"folder": "lab"}),
+        ] {
+            let text = serde_json::json!({
+                "folders": [{"key": "lab", "title": "Lab Servers"}],
+                "overviewGroup": preference,
+            })
+            .to_string();
+            let config = parse_config(&text).expect("malformed preference should not fail config");
+
+            assert!(config.overview_group.is_none());
+        }
+    }
+
+    #[test]
+    fn clearing_overview_group_represents_all() {
+        let mut config = parse_config(
+            r#"{"folders":[{"key":"lab","title":"Lab Servers"}],"overviewGroup":"lab"}"#,
+        )
+        .expect("valid preference should parse");
+
+        assert_eq!(
+            update_overview_group(&mut config, None).expect("clearing should succeed"),
+            None
+        );
+        assert!(config.overview_group.is_none());
+        assert!(serde_json::to_value(config)
+            .expect("config should serialize")
+            .get("overviewGroup")
+            .is_none());
+    }
+
+    #[test]
+    fn removing_selected_folder_clears_overview_group() {
+        let mut config = parse_config(
+            r#"{"folders":[{"key":"lab","title":"Lab Servers"},{"key":"this","title":"This Machine"}],"overviewGroup":"lab"}"#,
+        )
+        .expect("valid preference should parse");
+
+        remove_folder_from_config(&mut config, "lab").expect("selected folder should be removed");
+
+        assert!(config.overview_group.is_none());
+    }
+
+    #[test]
+    fn unknown_overview_group_is_rejected_without_replacing_previous_value() {
+        let mut config = parse_config(
+            r#"{"folders":[{"key":"lab","title":"Lab Servers"}],"overviewGroup":"lab"}"#,
+        )
+        .expect("valid preference should parse");
+
+        assert_eq!(
+            update_overview_group(&mut config, Some("missing".into())),
+            Err("unknown folder".into())
+        );
+        assert_eq!(config.overview_group.as_deref(), Some("lab"));
     }
 
     #[test]

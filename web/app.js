@@ -308,6 +308,27 @@
       })
       .catch(() => toast("Could not remove folder"));
   }
+  async function selectOverviewGroup(group) {
+    if (selectOverviewGroup._busy || (group !== null && group === ST.ovgroup)) return;
+    selectOverviewGroup._busy = true;
+    try {
+      const preference = await api("/api/preferences/overview-group", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group }),
+      });
+      const confirmedGroup =
+        preference && typeof preference.group === "string" ? preference.group : null;
+      if (confirmedGroup !== group) throw new Error("saved group did not match the selection");
+      ST.ovgroup = confirmedGroup;
+      if (ST.view === "fleet") viewFleet();
+    } catch (error) {
+      if (ST.view === "fleet") viewFleet();
+      toast("Could not save Overview group: " + (error.message || error));
+    } finally {
+      selectOverviewGroup._busy = false;
+    }
+  }
   function closeCtx() {
     const menu = $("lt-ctx");
     if (menu) menu.remove();
@@ -2372,8 +2393,7 @@
     if (groupControl) {
       const group = groupControl.getAttribute("data-ov-group");
       if (group === null || FOLDERS.some((folder) => folder.key === group)) {
-        ST.ovgroup = group;
-        viewFleet();
+        selectOverviewGroup(group);
       }
       return;
     }
@@ -2669,12 +2689,19 @@
     } catch (e) {}
     ST.ovmode = localStorage.getItem("lt-ovmode") || "grid";
     try {
-      const [serverList, folderList] = await Promise.all([
+      const [serverList, folderList, overviewPreference] = await Promise.all([
         api("/api/servers"),
         api("/api/folders"),
+        api("/api/preferences/overview-group"),
       ]);
       SERVERS = serverList;
       FOLDERS = folderList;
+      ST.ovgroup =
+        overviewPreference &&
+        typeof overviewPreference.group === "string" &&
+        FOLDERS.some((folder) => folder.key === overviewPreference.group)
+          ? overviewPreference.group
+          : null;
     } catch (e) {
       $("lt-view").innerHTML =
         '<div class="lt-empty">Backend not reachable — is the server running?<br>' +

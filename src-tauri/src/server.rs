@@ -23,6 +23,10 @@ pub fn router() -> Router {
         .route("/api/servers/{sid}", put(server_edit).delete(server_del))
         .route("/api/folders", get(folders).post(folder_add))
         .route("/api/folders/{key}", put(folder_edit).delete(folder_del))
+        .route(
+            "/api/preferences/overview-group",
+            get(overview_group_get).put(overview_group_put),
+        )
         .route("/api/fleet", get(fleet))
         .route("/api/{id}/status", get(host_status))
         .route("/api/{id}/ls", get(ls))
@@ -68,6 +72,44 @@ async fn servers() -> impl IntoResponse {
 
 async fn folders() -> impl IntoResponse {
     Json(config::get().folders.clone())
+}
+
+#[derive(Serialize)]
+struct OverviewGroupPreference {
+    group: Option<String>,
+}
+
+async fn overview_group_get() -> impl IntoResponse {
+    Json(OverviewGroupPreference {
+        group: config::get().overview_group.clone(),
+    })
+}
+
+fn overview_group_update(
+    body: &serde_json::Value,
+    folders: &[config::Folder],
+) -> Result<Option<String>, String> {
+    let group = match body.get("group") {
+        Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(group)) => group,
+        _ => return Err("group must be a folder key or null".into()),
+    };
+    if !folders.iter().any(|folder| folder.key == *group) {
+        return Err("unknown folder".into());
+    }
+    Ok(Some(group.clone()))
+}
+
+async fn overview_group_put(Json(body): Json<serde_json::Value>) -> Response {
+    let snapshot = config::get();
+    let group = match overview_group_update(&body, &snapshot.folders) {
+        Ok(group) => group,
+        Err(error) => return err400(error),
+    };
+    match config::set_overview_group(group) {
+        Ok(group) => Json(OverviewGroupPreference { group }).into_response(),
+        Err(error) => err400(error),
+    }
 }
 
 async fn server_add(Json(b): Json<serde_json::Value>) -> Response {
@@ -281,5 +323,27 @@ mod tests {
         };
 
         assert_eq!(rejection.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn overview_group_update_accepts_valid_values_and_rejects_unknown_keys() {
+        let folders = vec![config::Folder {
+            key: "lab".into(),
+            title: "Lab Servers".into(),
+            custom: None,
+            extra: Default::default(),
+        }];
+
+        assert_eq!(
+            overview_group_update(&serde_json::json!({"group": null}), &folders),
+            Ok(None)
+        );
+        assert_eq!(
+            overview_group_update(&serde_json::json!({"group": "lab"}), &folders),
+            Ok(Some("lab".into()))
+        );
+        let error = overview_group_update(&serde_json::json!({"group": "missing"}), &folders)
+            .expect_err("unknown key should be rejected");
+        assert_eq!(err400(error).status(), StatusCode::BAD_REQUEST);
     }
 }
