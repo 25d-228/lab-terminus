@@ -83,16 +83,56 @@ export function RegistryDialog({ state, folders, onClose, onSaved }: RegistryDia
           <DialogDescription>Changes are saved to the active Lab Terminus configuration.</DialogDescription>
         </DialogHeader>
         {state?.type === "folder" ? (
-          <label className="grid gap-2 text-sm">Folder name<Input autoFocus value={folderTitle} onChange={(event) => setFolderTitle(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void save() }} /></label>
+          <label className="grid gap-2 text-sm">
+            Folder name
+            <Input
+              autoFocus
+              value={folderTitle}
+              onChange={(event) => setFolderTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void save()
+              }}
+            />
+          </label>
         ) : state?.type === "server" ? (
           <div className="grid grid-cols-2 gap-3">
             <Field label="Name" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} autoFocus />
-            <label className="grid gap-2 text-sm">Kind<Select value={draft.kind} onValueChange={(kind) => setDraft({ ...draft, kind: kind as ServerKind })}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ssh">SSH server</SelectItem><SelectItem value="wsl">WSL</SelectItem><SelectItem value="nas">Synology NAS</SelectItem></SelectContent></Select></label>
+            <label className="grid gap-2 text-sm">
+              Kind
+              <Select
+                value={draft.kind}
+                onValueChange={(kind) =>
+                  setDraft({ ...draft, kind: kind as ServerKind })
+                }
+              >
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ssh">SSH server</SelectItem>
+                  <SelectItem value="wsl">WSL</SelectItem>
+                  <SelectItem value="nas">Synology NAS</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
             <Field label="Host / IP" value={draft.host} onChange={(host) => setDraft({ ...draft, host })} />
             <Field label="Port" value={draft.port} onChange={(port) => setDraft({ ...draft, port })} />
             <Field label="User" value={draft.user} onChange={(user) => setDraft({ ...draft, user })} />
             <Field label="Label (GPU / role)" value={draft.gpuLabel} onChange={(gpuLabel) => setDraft({ ...draft, gpuLabel })} />
-            <label className="col-span-2 grid gap-2 text-sm">Folder<Select value={draft.group} onValueChange={(group) => setDraft({ ...draft, group: group ?? "lab" })}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{folders.map((folder) => <SelectItem key={folder.key} value={folder.key}>{folder.title}</SelectItem>)}</SelectContent></Select></label>
+            <label className="col-span-2 grid gap-2 text-sm">
+              Folder
+              <Select
+                value={draft.group}
+                onValueChange={(group) => setDraft({ ...draft, group: group ?? "lab" })}
+              >
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {folders.map((folder) => (
+                    <SelectItem key={folder.key} value={folder.key}>
+                      {folder.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
           </div>
         ) : null}
         <DialogFooter>
