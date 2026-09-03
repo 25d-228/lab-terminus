@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -157,6 +157,74 @@ describe("App startup", () => {
 
     await user.click(screen.getByRole("button", { name: /^Overview/ }))
     expect(screen.getByRole("textbox", { name: "Search hosts" })).toHaveValue("Exp19")
+  })
+
+  it("isolates Explorer state and delayed responses when switching hosts", async () => {
+    const user = userEvent.setup()
+    let resolveOldHost!: (response: Response) => void
+    let resolveNewHost!: (response: Response) => void
+    const oldHostRefresh = new Promise<Response>((resolve) => {
+      resolveOldHost = resolve
+    })
+    const newHostListing = new Promise<Response>((resolve) => {
+      resolveNewHost = resolve
+    })
+    let oldHostLoads = 0
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const path = String(input)
+      if (path === "/api/servers") return json(servers)
+      if (path === "/api/folders") return json(folders)
+      if (path === "/api/preferences/overview-group") return json({ group: null })
+      if (path === "/api/transfers") return json({ jobs: [] })
+      if (path === "/api/fleet") {
+        return json({ servers: [status(), status("local", { gpus: [] })], rev: 1 })
+      }
+      if (path === "/api/gpu1/ls") {
+        oldHostLoads += 1
+        if (oldHostLoads === 1) {
+          return json({
+            path: "/home/alice",
+            entries: [
+              { name: "host-a.txt", isdir: false, size: 1, mtime: 1 },
+            ],
+          })
+        }
+        return oldHostRefresh
+      }
+      if (path === "/api/local/ls") return newHostListing
+      throw new Error(`Unexpected ${path}`)
+    })
+
+    render(<App />)
+    await screen.findByRole("heading", { name: "Hosts" })
+    await user.click(screen.getByRole("button", { name: /Exp19/ }))
+    await screen.findByText("host-a.txt")
+    await user.type(screen.getByRole("textbox", { name: "Filter files" }), "host-a")
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+
+    await user.click(screen.getByRole("button", { name: "This Machine1" }))
+    await user.click(screen.getByRole("button", { name: /Ubuntu/ }))
+
+    expect(screen.queryByText("host-a.txt")).not.toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Filter files" })).toHaveValue("")
+    resolveOldHost(
+      json({
+        path: "/stale",
+        entries: [{ name: "stale-a.txt", isdir: false, size: 1, mtime: 2 }],
+      }),
+    )
+    await act(() => Promise.resolve())
+    expect(screen.queryByText("stale-a.txt")).not.toBeInTheDocument()
+
+    resolveNewHost(
+      json({
+        path: "/local",
+        entries: [{ name: "host-b.txt", isdir: false, size: 1, mtime: 3 }],
+      }),
+    )
+    await screen.findByText("host-b.txt")
+    expect(screen.queryByText("stale-a.txt")).not.toBeInTheDocument()
   })
 })
 

@@ -113,6 +113,7 @@ export function App() {
                 ) : server ? (
                   tab === "explorer" ? (
                     <Explorer
+                      key={server.id}
                       server={server}
                       servers={lab.servers}
                       session={explorerSession}

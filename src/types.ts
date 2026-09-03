@@ -19,8 +19,16 @@ export interface Folder {
   custom?: boolean
 }
 
-export interface MemoryStatus { total: number; used: number }
-export interface DiskStatus { m: string; size: number; used: number }
+export interface MemoryStatus {
+  total: number
+  used: number
+}
+
+export interface DiskStatus {
+  m: string
+  size: number
+  used: number
+}
 export interface GpuStatus {
   index: number
   name: string
@@ -69,8 +77,14 @@ export interface HostStatus {
   network: NetworkStatus
   top_procs: TopProcessStatus[]
 }
-export interface FleetResponse { servers: Array<HostStatus | null>; rev: number }
-export interface OverviewPreference { group: string | null }
+export interface FleetResponse {
+  servers: Array<HostStatus | null>
+  rev: number
+}
+
+export interface OverviewPreference {
+  group: string | null
+}
 
 export interface FileEntry {
   name: string
@@ -98,7 +112,9 @@ export interface TransferJob {
   speed: number
   error?: string | null
 }
-export interface TransferResponse { jobs: TransferJob[] }
+export interface TransferResponse {
+  jobs: TransferJob[]
+}
 
 export interface ServerDraft {
   name: string

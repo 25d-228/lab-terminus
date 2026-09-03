@@ -2,9 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { toast } from "@/components/ui/toast"
 import { api, jsonRequest } from "@/lib/api"
-import type { FleetResponse, Folder, HostStatus, OverviewPreference, Server } from "@/types"
+import type {
+  FleetResponse,
+  Folder,
+  HostStatus,
+  OverviewPreference,
+  Server,
+} from "@/types"
 
-export type AppView = { kind: "overview" } | { kind: "server"; id: string; tab: "explorer" | "terminal" | "monitor" }
+export type AppView =
+  | { kind: "overview" }
+  | {
+      kind: "server"
+      id: string
+      tab: "explorer" | "terminal" | "monitor"
+    }
 
 const FLEET_POLL_MS = 5000
 
@@ -19,8 +31,6 @@ export function useLabApp() {
   const [connection, setConnection] = useState("connecting…")
   const revision = useRef<number | undefined>(undefined)
   const preferenceBusy = useRef(false)
-  const foldersRef = useRef(folders)
-  foldersRef.current = folders
 
   const loadRegistry = useCallback(async () => {
     const [nextServers, nextFolders] = await Promise.all([
@@ -82,12 +92,16 @@ export function useLabApp() {
           const fleet = await api<FleetResponse>("/api/fleet")
           if (disposed) return
           const next: Record<string, HostStatus> = {}
-          for (const status of fleet.servers) if (status) next[status.id] = status
+          for (const status of fleet.servers) {
+            if (status) next[status.id] = status
+          }
           setStatuses(next)
           setConnection(
             `${fleet.servers.filter((status) => status?.online === true).length}/${fleet.servers.length} hosts online`,
           )
-          if (revision.current !== undefined && revision.current !== fleet.rev) await loadRegistry()
+          if (revision.current !== undefined && revision.current !== fleet.rev) {
+            await loadRegistry()
+          }
           revision.current = fleet.rev
         } catch {
           if (!disposed) setConnection("backend unreachable")
@@ -111,24 +125,34 @@ export function useLabApp() {
     }
   }, [loadRegistry, loading, startupError])
 
-  const selectOverviewGroup = useCallback(async (group: string | null) => {
-    if (preferenceBusy.current || group === overviewGroup) return
-    preferenceBusy.current = true
-    const previous = overviewGroup
-    try {
-      const saved = await api<OverviewPreference>(
-        "/api/preferences/overview-group",
-        jsonRequest("PUT", { group }),
-      )
-      if (saved.group !== group) throw new Error("saved group did not match the selection")
-      setOverviewGroup(saved.group)
-    } catch (error) {
-      setOverviewGroup(previous)
-      toast.add({ title: "Could not save Overview group", description: String(error), type: "error", timeout: 2600 })
-    } finally {
-      preferenceBusy.current = false
-    }
-  }, [overviewGroup])
+  const selectOverviewGroup = useCallback(
+    async (group: string | null) => {
+      if (preferenceBusy.current || group === overviewGroup) return
+      preferenceBusy.current = true
+      const previous = overviewGroup
+      try {
+        const saved = await api<OverviewPreference>(
+          "/api/preferences/overview-group",
+          jsonRequest("PUT", { group }),
+        )
+        if (saved.group !== group) {
+          throw new Error("saved group did not match the selection")
+        }
+        setOverviewGroup(saved.group)
+      } catch (error) {
+        setOverviewGroup(previous)
+        toast.add({
+          title: "Could not save Overview group",
+          description: String(error),
+          type: "error",
+          timeout: 2600,
+        })
+      } finally {
+        preferenceBusy.current = false
+      }
+    },
+    [overviewGroup],
+  )
 
   return {
     servers,

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   ChevronDown,
   ChevronRight,
@@ -81,14 +81,45 @@ export function AppSidebar({
     id: string
     label: string
   } | null>(null)
+  const previousServerIds = useRef(new Set(servers.map((server) => server.id)))
   const freeHosts = servers.filter(
     (server) => (gpuSummary(statuses[server.id])?.idle ?? 0) > 0,
   ).length
 
+  const updateExpandedFolders = useCallback((keys: string[]) => {
+    setCollapsed((current) => {
+      if (keys.every((key) => current[key] === false)) return current
+      const next = { ...current }
+      for (const key of keys) next[key] = false
+      localStorage.setItem("lt-collapsed", JSON.stringify(next))
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (view.kind !== "server") return
+    const active = servers.find((server) => server.id === view.id)
+    if (active) updateExpandedFolders([active.group || "lab"])
+  }, [servers, updateExpandedFolders, view])
+
+  useEffect(() => {
+    const currentIds = new Set(servers.map((server) => server.id))
+    const addedGroups = servers
+      .filter((server) => !previousServerIds.current.has(server.id))
+      .map((server) => server.group || "lab")
+    previousServerIds.current = currentIds
+    if (addedGroups.length) updateExpandedFolders(addedGroups)
+  }, [servers, updateExpandedFolders])
+
   const toggle = (key: string) => {
-    const next = { ...collapsed, [key]: !(key in collapsed ? collapsed[key] : true) }
-    setCollapsed(next)
-    localStorage.setItem("lt-collapsed", JSON.stringify(next))
+    setCollapsed((current) => {
+      const next = {
+        ...current,
+        [key]: !(key in current ? current[key] : true),
+      }
+      localStorage.setItem("lt-collapsed", JSON.stringify(next))
+      return next
+    })
   }
 
   const confirmRemove = async () => {

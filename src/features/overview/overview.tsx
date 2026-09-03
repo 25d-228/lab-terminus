@@ -169,14 +169,20 @@ function statusText(server: Server, status?: HostStatus) {
     undefined,
   )
   if (gpu) {
-    return `GPU ${gpu.average}% · ${gpu.idle > 0 ? `${gpu.idle} idle` : "all busy"}${disk ? ` · disk ${percent(disk.used, disk.size)}%` : ""}`
+    const availability = gpu.idle > 0 ? `${gpu.idle} idle` : "all busy"
+    const diskUsage = disk ? ` · disk ${percent(disk.used, disk.size)}%` : ""
+    return `GPU ${gpu.average}% · ${availability}${diskUsage}`
   }
   if (server.kind === "nas") {
     return disk
       ? `volume ${percent(disk.used, disk.size)}% · ${bytes(disk.size - disk.used)} free`
       : "—"
   }
-  return `${status.ncpu ? `load ${status.load[0]} · ${status.ncpu} cores` : "idle"}${disk ? ` · disk ${percent(disk.used, disk.size)}%` : ""}`
+  const load = status.ncpu
+    ? `load ${status.load[0]} · ${status.ncpu} cores`
+    : "idle"
+  const diskUsage = disk ? ` · disk ${percent(disk.used, disk.size)}%` : ""
+  return `${load}${diskUsage}`
 }
 
 function address(server: Server) {

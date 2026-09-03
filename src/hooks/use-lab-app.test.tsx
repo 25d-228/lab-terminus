@@ -10,21 +10,29 @@ describe("useLabApp", () => {
   it("restores the valid preference before completing startup and retains it after a failed update", async () => {
     let preferenceWrites = 0
     let currentFolders = folders
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const path = String(input)
-      if (path === "/api/servers") return json(servers)
-      if (path === "/api/folders") return json(currentFolders)
-      if (path === "/api/preferences/overview-group" && !init) return json({ group: "this" })
-      if (path === "/api/preferences/overview-group") {
-        preferenceWrites += 1
-        return preferenceWrites === 1 ? json({ group: "lab" }) : new Response("disk full", { status: 500 })
-      }
-      if (path === "/api/fleet") return json({ servers: [], rev: 1 })
-      throw new Error(`Unexpected ${path}`)
-    })
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const path = String(input)
+        if (path === "/api/servers") return json(servers)
+        if (path === "/api/folders") return json(currentFolders)
+        if (path === "/api/preferences/overview-group" && !init) {
+          return json({ group: "this" })
+        }
+        if (path === "/api/preferences/overview-group") {
+          preferenceWrites += 1
+          return preferenceWrites === 1
+            ? json({ group: "lab" })
+            : new Response("disk full", { status: 500 })
+        }
+        if (path === "/api/fleet") return json({ servers: [], rev: 1 })
+        throw new Error(`Unexpected ${path}`)
+      })
     const { result, unmount } = renderHook(() => useLabApp())
     await waitFor(() => expect(result.current.loading).toBe(false))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/fleet", undefined))
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/fleet", undefined)
+    })
     expect(result.current.overviewGroup).toBe("this")
     await act(() => result.current.selectOverviewGroup("lab"))
     expect(result.current.overviewGroup).toBe("lab")
@@ -33,7 +41,10 @@ describe("useLabApp", () => {
     currentFolders = folders.filter((folder) => folder.key !== "lab")
     await act(() => result.current.refreshRegistry())
     expect(result.current.overviewGroup).toBeNull()
-    expect(fetchMock).toHaveBeenCalledWith("/api/preferences/overview-group", expect.objectContaining({ method: "PUT" }))
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/preferences/overview-group",
+      expect.objectContaining({ method: "PUT" }),
+    )
     unmount()
   })
 

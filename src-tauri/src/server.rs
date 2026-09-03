@@ -1,5 +1,5 @@
-//! Embedded loopback API server (axum) mirroring the prototype's routes, so the
-//! frontend contracts validated by the desktop application.
+//! Embedded loopback API server (axum) that serves the frontend and preserves
+//! the desktop application's validated API contracts.
 use axum::{
     extract::{Path, Query},
     http::{header, StatusCode, Uri},

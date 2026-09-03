@@ -41,8 +41,22 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -63,14 +77,24 @@ interface ExplorerProps {
 }
 
 type SortKey = "name" | "size" | "mtime"
-type PromptState = { title: string; initial?: string; run: (value: string) => void } | null
+type PromptState =
+  | {
+      title: string
+      initial?: string
+      run: (value: string) => void
+    }
+  | null
 
 export interface ExplorerSessionState {
   paths: Record<string, string | undefined>
   forward: Record<string, string[]>
+  filterHost?: string
   filter: string
   hidden: boolean
-  sort: { key: SortKey; ascending: boolean }
+  sort: {
+    key: SortKey
+    ascending: boolean
+  }
 }
 
 export function createExplorerSessionState(): ExplorerSessionState {
@@ -100,44 +124,60 @@ export function Explorer({
   const [sendHost, setSendHost] = useState("")
   const [sendPath, setSendPath] = useState("/")
   const request = useRef(0)
+  const active = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const cwd = session.paths[server.id]
-  const { filter, hidden, sort } = session
+  const filter = session.filterHost === server.id ? session.filter : ""
+  const { hidden, sort } = session
 
   const load = useCallback(async (path?: string) => {
     const sequence = ++request.current
     setLoading(true)
     try {
-      const result = await api<ListingResponse>(path == null ? `/api/${server.id}/ls` : `/api/${server.id}/ls?path=${encodeURIComponent(path)}`)
-      if (sequence !== request.current) return
+      const result = await api<ListingResponse>(
+        path == null
+          ? `/api/${server.id}/ls`
+          : `/api/${server.id}/ls?path=${encodeURIComponent(path)}`,
+      )
+      if (!active.current || sequence !== request.current) return
       setListing(result)
       onSessionChange((current) => ({
         ...current,
         paths: { ...current.paths, [server.id]: result.path },
       }))
     } catch (error) {
-      if (sequence !== request.current) return
+      if (!active.current || sequence !== request.current) return
       setListing({ path: path || "/", entries: [], error: String(error) })
       onSessionChange((current) => ({
         ...current,
         paths: { ...current.paths, [server.id]: path || "/" },
       }))
     } finally {
-      if (sequence === request.current) setLoading(false)
+      if (active.current && sequence === request.current) setLoading(false)
     }
   }, [onSessionChange, server.id])
 
   useEffect(() => {
+    active.current = true
     setListing(null)
     setSelected(null)
+    onSessionChange((current) =>
+      current.filterHost === server.id
+        ? current
+        : { ...current, filterHost: server.id, filter: "" },
+    )
     void load(cwd)
-    return () => { request.current += 1 }
+    return () => {
+      active.current = false
+      request.current += 1
+    }
   }, [load])
 
   const enter = (path: string, preserveFilter = false) => {
     onSessionChange((current) => ({
       ...current,
       forward: { ...current.forward, [server.id]: [] },
+      filterHost: server.id,
       filter: preserveFilter ? current.filter : "",
     }))
     setSelected(null)
@@ -146,6 +186,7 @@ export function Explorer({
   const mutate = async (op: string, path: string, to?: string) => {
     try {
       await api(`/api/${server.id}/fs`, jsonRequest("POST", { op, path, to }))
+      if (!active.current) return
       const title = (
         {
           mkdir: "Folder created",
@@ -217,7 +258,10 @@ export function Explorer({
     toast.add({ title: `Downloading ${entry.name}…`, timeout: 2600 })
   }
   const upload = async (files: File[]) => {
-    if (server.kind !== "ssh") return toast.add({ title: "Upload supported on SSH hosts (for now)", timeout: 2600 })
+    if (server.kind !== "ssh") {
+      toast.add({ title: "Upload supported on SSH hosts (for now)", timeout: 2600 })
+      return
+    }
     if (!files.length) return
     onTransfersOpen()
     let failed = 0
@@ -227,6 +271,7 @@ export function Explorer({
           `/api/${server.id}/upload?path=${encodeURIComponent(cwd || "/")}&name=${encodeURIComponent(file.name)}`,
           { method: "POST", body: file },
         )
+        if (!active.current) return
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
       } catch (error) {
         failed += 1
@@ -238,16 +283,29 @@ export function Explorer({
         })
       }
     }
-    if (!failed) toast.add({ title: "Upload complete", type: "success", timeout: 2600 })
-    else if (failed < files.length) toast.add({ title: `${files.length - failed} of ${files.length} uploads completed`, type: "warning", timeout: 2600 })
+    if (!active.current) return
+    if (!failed) {
+      toast.add({ title: "Upload complete", type: "success", timeout: 2600 })
+    } else if (failed < files.length) {
+      toast.add({
+        title: `${files.length - failed} of ${files.length} uploads completed`,
+        type: "warning",
+        timeout: 2600,
+      })
+    }
     await load(cwd)
   }
   const openSend = (entry: FileEntry) => {
     const first = servers.find((candidate) => candidate.kind === "ssh" || candidate.kind === "nas")
-    setSendEntry(entry); setSendHost(first?.id ?? ""); setSendPath(first?.home || "/")
+    setSendEntry(entry)
+    setSendHost(first?.id ?? "")
+    setSendPath(first?.home || "/")
   }
   const submitSend = async () => {
-    if (!sendEntry || !sendHost || !sendPath.trim()) return toast.add({ title: "Pick a destination folder", type: "error", timeout: 2600 })
+    if (!sendEntry || !sendHost || !sendPath.trim()) {
+      toast.add({ title: "Pick a destination folder", type: "error", timeout: 2600 })
+      return
+    }
     try {
       await api(
         "/api/transfers/copy",
@@ -299,15 +357,16 @@ export function Explorer({
   const currentParent = listing?.parent || parentPath(cwd)
   const destinations = servers.filter((candidate) => candidate.kind === "ssh" || candidate.kind === "nas")
 
-  return <div
-    className="flex min-h-0 flex-1 flex-col"
-    onDragOver={(event) => event.preventDefault()}
-    onDrop={(event) => {
-      if (!event.dataTransfer.files.length) return
-      event.preventDefault()
-      void upload([...event.dataTransfer.files])
-    }}
-  >
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        if (!event.dataTransfer.files.length) return
+        event.preventDefault()
+        void upload([...event.dataTransfer.files])
+      }}
+    >
     <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3">
       <Button
         variant="ghost"
@@ -376,7 +435,11 @@ export function Explorer({
             className="hidden"
             type="file"
             multiple
-            onChange={(event) => void upload([...(event.target.files ?? [])])}
+            onChange={(event) => {
+              const files = [...(event.currentTarget.files ?? [])]
+              event.currentTarget.value = ""
+              void upload(files)
+            }}
           />
         </>
       )}
@@ -387,15 +450,18 @@ export function Explorer({
         placeholder="filter…"
         value={filter}
         onChange={(event) =>
-          onSessionChange((current) => ({ ...current, filter: event.target.value }))
+          onSessionChange((current) => ({
+            ...current,
+            filterHost: server.id,
+            filter: event.target.value,
+          }))
         }
       />
       <label className="flex items-center gap-2 text-xs">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={hidden}
-          onChange={(event) =>
-            onSessionChange((current) => ({ ...current, hidden: event.target.checked }))
+          onCheckedChange={(checked) =>
+            onSessionChange((current) => ({ ...current, hidden: checked }))
           }
         />
         HIDDEN
@@ -562,7 +628,8 @@ export function Explorer({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  </div>
+    </div>
+  )
 }
 
 function Breadcrumbs({
@@ -664,16 +731,28 @@ function FileRow({
 }
 
 function FileIcon({ entry }: { entry: FileEntry }) {
-  if (entry.isdir) return <Folder className="size-4 text-chart-3" />
-  if (entry.islink) return <Link className="size-4" />
+  if (entry.isdir) {
+    return <Folder className="size-4 text-chart-3" />
+  }
+  if (entry.islink) {
+    return <Link className="size-4" />
+  }
   const extension = entry.name.toLowerCase().split(".").pop()
   if (
     ["js", "jsx", "ts", "tsx", "py", "rs", "go", "c", "cpp", "java", "sh", "ps1"]
       .includes(extension || "")
-  ) return <FileCode2 className="size-4 text-chart-2" />
-  if (["json", "yaml", "yml", "toml"].includes(extension || "")) return <FileJson className="size-4 text-chart-4" />
-  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(extension || "")) return <Image className="size-4 text-chart-5" />
-  if (["md", "txt", "log", "tex"].includes(extension || "")) return <Braces className="size-4" />
+  ) {
+    return <FileCode2 className="size-4 text-chart-2" />
+  }
+  if (["json", "yaml", "yml", "toml"].includes(extension || "")) {
+    return <FileJson className="size-4 text-chart-4" />
+  }
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(extension || "")) {
+    return <Image className="size-4 text-chart-5" />
+  }
+  if (["md", "txt", "log", "tex"].includes(extension || "")) {
+    return <Braces className="size-4" />
+  }
   return <File className="size-4" />
 }
 
@@ -733,7 +812,12 @@ function Preview({ entry, server, cwd, onOpen, onTerminal, onCopy, onDownload, o
   )
 }
 
-function NamePrompt({ state, onClose }: { state: PromptState; onClose: () => void }) {
+interface NamePromptProps {
+  state: PromptState
+  onClose: () => void
+}
+
+function NamePrompt({ state, onClose }: NamePromptProps) {
   const [value, setValue] = useState("")
   useEffect(() => {
     setValue(state?.initial ?? "")
@@ -744,14 +828,21 @@ function NamePrompt({ state, onClose }: { state: PromptState; onClose: () => voi
     if (run && value.trim()) run(value.trim())
   }
   return (
-    <Dialog open={state !== null} onOpenChange={(open) => { if (!open) onClose() }}>
+    <Dialog
+      open={state !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
       <DialogContent>
         <DialogHeader><DialogTitle>{state?.title}</DialogTitle></DialogHeader>
         <Input
           autoFocus
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") submit() }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submit()
+          }}
         />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
