@@ -72,4 +72,22 @@ describe("TerminalWorkspace", () => {
     expect(terminalMocks.terminals[0].dispose).toHaveBeenCalledTimes(1)
     expect(SocketMock.instances.every((socket) => socket.close.mock.calls.length === 1)).toBe(true)
   })
+
+  it("keeps the active session selected when a different session closes", async () => {
+    const user = userEvent.setup()
+    const view = render(
+      <TerminalWorkspace server={servers[0]} visible theme="light" />,
+    )
+    await user.click(screen.getByRole("button", { name: "New shell on this host" }))
+    await user.click(screen.getByRole("button", { name: "sh1" }))
+    const active = screen.getByRole("button", { name: "sh1" })
+    expect(active).toHaveClass("bg-secondary")
+
+    await user.click(screen.getByRole("button", { name: "Close shell 2" }))
+
+    expect(screen.getByRole("button", { name: "sh1" })).toHaveClass("bg-secondary")
+    expect(terminalMocks.terminals[0].dispose).not.toHaveBeenCalled()
+    expect(terminalMocks.terminals[1].dispose).toHaveBeenCalledTimes(1)
+    view.unmount()
+  })
 })
