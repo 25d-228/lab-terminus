@@ -83,6 +83,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [drag, setDrag] = useState<DragState | null>(null)
   const [announcement, setAnnouncement] = useState("")
+  const [monitorSession, setMonitorSession] = useState(0)
   const dragRef = useRef<DragState | null>(null)
   const histories = useRef<Record<string, Array<{ u: number; m: number }>>>({})
   const networks = useRef<Record<string, NetState>>({})
@@ -93,6 +94,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   const visibleRef = useRef(visible)
   const processRef = useRef(processes)
   const statusRef = useRef(status)
+  const activeSession = useRef(0)
 
   dragRef.current = drag
   activeServerId.current = server?.id
@@ -109,8 +111,14 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   }, [])
 
   const applyMonitorSample = useCallback(
-    (next: HostStatus) => {
-      if (!visibleRef.current || next.id !== activeServerId.current) return
+    (next: HostStatus, session: number) => {
+      if (
+        session !== activeSession.current ||
+        !visibleRef.current ||
+        next.id !== activeServerId.current
+      ) {
+        return
+      }
       if (dragRef.current) {
         pendingSample.current = next
         pendingStatus.current = next
@@ -142,18 +150,35 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   )
 
   useEffect(() => {
-    if (!fleetStatus || fleetStatus.id !== server?.id) return
-    if (dragRef.current) {
-      pendingStatus.current = fleetStatus
-      return
+    activeSession.current += 1
+    pendingSample.current = undefined
+    pendingStatus.current = undefined
+    pendingProcesses.current = false
+
+    if (!server || server.kind === "nas" || !visible) return
+
+    const session = activeSession.current
+    networks.current[server.id] = emptyNetwork()
+    for (const key of Object.keys(histories.current)) {
+      if (key.startsWith(`${server.id}:`)) delete histories.current[key]
     }
-    setStatus(fleetStatus)
-    if (visible && !networks.current[fleetStatus.id]?.sample) {
-      updateNetwork(networks.current, fleetStatus)
+    setStatus(fleetStatus?.id === server.id ? fleetStatus : undefined)
+    setMonitorSession((current) => current + 1)
+
+    return () => {
+      if (activeSession.current === session) activeSession.current += 1
+      networks.current[server.id] = emptyNetwork()
+      for (const key of Object.keys(histories.current)) {
+        if (key.startsWith(`${server.id}:`)) delete histories.current[key]
+      }
+      pendingSample.current = undefined
+      pendingStatus.current = undefined
+      pendingProcesses.current = false
     }
-  }, [fleetStatus, server?.id, visible])
+  }, [server?.id, server?.kind, visible])
 
   useEffect(() => {
+    if (!fleetStatus || fleetStatus.id !== server?.id) return
     if (dragRef.current) {
       pendingStatus.current = fleetStatus
     } else {
@@ -178,7 +203,14 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   )
 
   const requestStatus = useCallback(
-    async (host: Server, showLoading: boolean) => {
+    async (host: Server, showLoading: boolean, session: number) => {
+      if (
+        session !== activeSession.current ||
+        !visibleRef.current ||
+        activeServerId.current !== host.id
+      ) {
+        return
+      }
       const before = processState(host.id)
       if (!showLoading && before.inFlight === before.revision) return
       const request = before.request + 1
@@ -208,7 +240,11 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
         ) {
           return
         }
-        if (!visibleRef.current || activeServerId.current !== host.id) {
+        if (
+          session !== activeSession.current ||
+          !visibleRef.current ||
+          activeServerId.current !== host.id
+        ) {
           processRef.current = {
             ...processRef.current,
             [host.id]: { ...current, inFlight: null },
@@ -226,7 +262,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
         }
         processRef.current = { ...processRef.current, [host.id]: applied }
         publishProcesses()
-        applyMonitorSample(next)
+        applyMonitorSample(next, session)
       } catch (error) {
         const current = processRef.current[host.id]
         if (
@@ -237,7 +273,11 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
         ) {
           return
         }
-        if (!visibleRef.current || activeServerId.current !== host.id) {
+        if (
+          session !== activeSession.current ||
+          !visibleRef.current ||
+          activeServerId.current !== host.id
+        ) {
           processRef.current = {
             ...processRef.current,
             [host.id]: { ...current, inFlight: null },
@@ -263,10 +303,11 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
 
   useEffect(() => {
     if (!visible || !server || server.kind === "nas") return
+    const session = activeSession.current
     let disposed = false
     let timer: number | undefined
     const tick = async () => {
-      await requestStatus(server, false)
+      await requestStatus(server, false, session)
       if (!disposed) timer = window.setTimeout(tick, MONITOR_POLL_MS)
     }
     timer = window.setTimeout(tick, MONITOR_POLL_MS)
@@ -292,7 +333,8 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
     }
     processRef.current = { ...processRef.current, [server.id]: next }
     publishProcesses()
-    queueMicrotask(() => void requestStatus(server, true))
+    const session = activeSession.current
+    queueMicrotask(() => void requestStatus(server, true, session))
   }
 
   const move = (
@@ -322,7 +364,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
     pendingSample.current = undefined
     pendingStatus.current = undefined
 
-    if (sample) applyMonitorSample(sample)
+    if (sample) applyMonitorSample(sample, activeSession.current)
     if (
       latestStatus &&
       latestStatus !== sample &&
@@ -383,7 +425,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
             changeScope,
           )
         : {},
-    [expanded, processes, processState, server, status],
+    [expanded, monitorSession, processes, processState, server, status],
   )
 
   if (!visible) return null
@@ -619,9 +661,9 @@ function buildSections(
   const networkSamples = Math.max(network.rx.length, network.tx.length)
   const networkDetail = !status.network?.available
     ? "unavailable"
-    : networkSamples < 2
-      ? "collecting"
-      : `${networkSamples} samples`
+    : network.rate
+      ? `${networkSamples} ${networkSamples === 1 ? "sample" : "samples"}`
+      : "collecting"
   const networkSection = (
     <div className="grid grid-cols-2 gap-3">
       <MetricCard
@@ -653,14 +695,25 @@ function buildSections(
     .sort((left, right) => (right.mem || 0) - (left.mem || 0))
     .map((item) => ({
       key: `gpu:${item.pid}`,
-      cells: [item.user, item.pid, item.gpu, `${(item.mem / 1024).toFixed(1)} GB`, item.etime, item.cmd],
+      cells: [
+        item.user,
+        item.pid,
+        item.gpu,
+        `${(item.mem / 1024).toFixed(1)} GB`,
+        item.etime,
+        item.cmd,
+      ],
       command: item.cmd,
     }))
   const gpuProcesses = (
     <ProcessTable
       columns={["USER", "PID", "GPU", "VRAM", "TIME", "COMMAND"]}
       rows={gpuRows}
-      empty={`No GPU processes${status.gpus.length ? " — GPUs idle, or other users’ jobs not visible" : ""}.`}
+      empty={
+        status.gpus.length
+          ? "No GPU processes — GPUs idle, or other users’ jobs not visible."
+          : "No GPU processes."
+      }
       expanded={expanded}
       setExpanded={setExpanded}
     />
@@ -804,10 +857,12 @@ function MetricCard({ label, value, points }: MetricCardProps) {
   const max = Math.max(1, ...points)
   const line = points.length
     ? points
-        .map(
-          (point, index) =>
-            `${points.length < 2 ? index * 100 : (index / (points.length - 1)) * 100},${28 - (point / max) * 28}`,
-        )
+        .map((point, index) => {
+          const x =
+            points.length < 2 ? index * 100 : (index / (points.length - 1)) * 100
+          const y = 28 - (point / max) * 28
+          return `${x},${y}`
+        })
         .join(" ")
     : ""
   return (
@@ -858,16 +913,27 @@ function ProcessTable({
           <div key={row.key}>
             <button
               className="grid w-full grid-flow-col auto-cols-fr px-3 py-2 text-left text-xs hover:bg-muted/50"
-              onClick={() => setExpanded((state) => ({ ...state, [row.key]: !state[row.key] }))}
+              onClick={() =>
+                setExpanded((state) => ({
+                  ...state,
+                  [row.key]: !state[row.key],
+                }))
+              }
             >
               {row.cells.map((cell, index) => (
-                <span key={index} className="truncate" title={index === row.cells.length - 1 ? row.command : undefined}>
+                <span
+                  key={index}
+                  className="truncate"
+                  title={index === row.cells.length - 1 ? row.command : undefined}
+                >
                   {cell}
                 </span>
               ))}
             </button>
             {expanded[row.key] && (
-              <div className="border-t bg-muted/30 p-2 font-mono text-xs break-all">{row.command}</div>
+              <div className="border-t bg-muted/30 p-2 font-mono text-xs break-all">
+                {row.command}
+              </div>
             )}
           </div>
         ))

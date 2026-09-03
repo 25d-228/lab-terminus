@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -225,6 +225,60 @@ describe("App startup", () => {
     )
     await screen.findByText("host-b.txt")
     expect(screen.queryByText("stale-a.txt")).not.toBeInTheDocument()
+  })
+
+  it("submits every file in an accepted upload batch after leaving Explorer", async () => {
+    const user = userEvent.setup()
+    let resolveFirstUpload!: (response: Response) => void
+    const firstUpload = new Promise<Response>((resolve) => {
+      resolveFirstUpload = resolve
+    })
+    const uploaded: string[] = []
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === "/api/servers") return json(servers)
+      if (path === "/api/folders") return json(folders)
+      if (path === "/api/preferences/overview-group") return json({ group: null })
+      if (path === "/api/transfers") return json({ jobs: [] })
+      if (path === "/api/fleet") return json({ servers: [status()], rev: 1 })
+      if (path === "/api/gpu1/ls") {
+        return json({ path: "/home/alice", entries: [] })
+      }
+      if (path.startsWith("/api/gpu1/upload")) {
+        uploaded.push(path)
+        if (uploaded.length === 1) return firstUpload
+        return new Response(null, { status: 200 })
+      }
+      throw new Error(`Unexpected ${init?.method || "GET"} ${path}`)
+    })
+
+    const { container } = render(<App />)
+    await screen.findByRole("heading", { name: "Hosts" })
+    await openHost(user)
+    await screen.findByText(/Empty folder/)
+    const picker = container.querySelector<HTMLInputElement>('input[type="file"]')!
+    fireEvent.change(picker, {
+      target: {
+        files: [
+          new File(["first"], "first.txt", { type: "text/plain" }),
+          new File(["second"], "second.txt", { type: "text/plain" }),
+        ],
+      },
+    })
+    await waitFor(() => expect(uploaded).toHaveLength(1))
+
+    await user.click(screen.getByRole("button", { name: "Close transfers" }))
+    await user.click(await screen.findByRole("tab", { name: "Terminal" }))
+    resolveFirstUpload(new Response(null, { status: 200 }))
+
+    await waitFor(() => expect(uploaded).toHaveLength(2))
+    expect(uploaded[0]).toContain("name=first.txt")
+    expect(uploaded[1]).toContain("name=second.txt")
+    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
   })
 })
 

@@ -185,7 +185,7 @@ describe("Monitor", () => {
     vi.useRealTimers()
   })
 
-  it("does not sample fleet updates while hidden and samples only on two-second monitor polls", async () => {
+  it("starts each active session with a fresh network baseline", async () => {
     vi.useFakeTimers()
     const onStatus = vi.fn()
     let monitorSample = 0
@@ -226,8 +226,49 @@ describe("Monitor", () => {
     expect(screen.getByText("collecting")).toBeInTheDocument()
     await act(() => vi.advanceTimersByTimeAsync(2000))
     expect(onStatus).toHaveBeenCalledTimes(2)
-    expect(screen.getByText("2 samples")).toBeInTheDocument()
+    expect(screen.getByText("1 sample")).toBeInTheDocument()
     expect(screen.getByText("% · last 0.1 min")).toBeInTheDocument()
+
+    view.rerender(
+      <Monitor
+        server={servers[0]}
+        fleetStatus={status("gpu1", {
+          network: {
+            available: true,
+            rx_bytes: 9000,
+            tx_bytes: 10000,
+            uptime_seconds: 100,
+          },
+        })}
+        visible={false}
+        onStatus={onStatus}
+      />,
+    )
+    view.rerender(
+      <Monitor
+        server={servers[0]}
+        fleetStatus={status("gpu1", {
+          network: {
+            available: true,
+            rx_bytes: 11000,
+            tx_bytes: 12000,
+            uptime_seconds: 110,
+          },
+        })}
+        visible
+        onStatus={onStatus}
+      />,
+    )
+    expect(screen.getByText("collecting")).toBeInTheDocument()
+    expect(screen.getAllByText("Collecting…")).toHaveLength(2)
+
+    await act(() => vi.advanceTimersByTimeAsync(2000))
+    expect(screen.getByText("collecting")).toBeInTheDocument()
+    expect(screen.getAllByText("Collecting…")).toHaveLength(2)
+
+    await act(() => vi.advanceTimersByTimeAsync(2000))
+    expect(screen.getByText("1 sample")).toBeInTheDocument()
+    expect(screen.queryByText("Collecting…")).not.toBeInTheDocument()
     view.unmount()
     vi.useRealTimers()
   })

@@ -120,6 +120,7 @@ export function App() {
                       onSessionChange={setExplorerSession}
                       onOpenTerminal={() => changeTab("terminal")}
                       onTransfersOpen={() => transfers.setOpen(true)}
+                      onUploadBatch={transfers.uploadBatch}
                     />
                   ) : null
                 ) : (

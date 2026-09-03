@@ -60,9 +60,19 @@ import {
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
+import type {
+  UploadBatch,
+  UploadBatchResult,
+} from "@/features/transfers/use-transfers"
 import { api, jsonRequest } from "@/lib/api"
 import { age, bytes, joinPath, parentPath, validName } from "@/lib/format"
 import type { FileEntry, ListingResponse, Server } from "@/types"
@@ -74,6 +84,7 @@ interface ExplorerProps {
   onSessionChange: Dispatch<SetStateAction<ExplorerSessionState>>
   onOpenTerminal: () => void
   onTransfersOpen: () => void
+  onUploadBatch: (batch: UploadBatch) => Promise<UploadBatchResult>
 }
 
 type SortKey = "name" | "size" | "mtime"
@@ -114,6 +125,7 @@ export function Explorer({
   onSessionChange,
   onOpenTerminal,
   onTransfersOpen,
+  onUploadBatch,
 }: ExplorerProps) {
   const [listing, setListing] = useState<ListingResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -125,10 +137,13 @@ export function Explorer({
   const [sendPath, setSendPath] = useState("/")
   const request = useRef(0)
   const active = useRef(false)
+  const sessionRef = useRef(session)
   const inputRef = useRef<HTMLInputElement>(null)
   const cwd = session.paths[server.id]
   const filter = session.filterHost === server.id ? session.filter : ""
   const { hidden, sort } = session
+
+  sessionRef.current = session
 
   const load = useCallback(async (path?: string) => {
     const sequence = ++request.current
@@ -253,7 +268,8 @@ export function Explorer({
   }
   const download = (entry: FileEntry) => {
     const anchor = document.createElement("a")
-    anchor.href = `/api/${server.id}/download?path=${encodeURIComponent(joinPath(cwd, entry.name))}`
+    const path = encodeURIComponent(joinPath(cwd, entry.name))
+    anchor.href = `/api/${server.id}/download?path=${path}`
     anchor.click()
     toast.add({ title: `Downloading ${entry.name}…`, timeout: 2600 })
   }
@@ -263,37 +279,18 @@ export function Explorer({
       return
     }
     if (!files.length) return
-    onTransfersOpen()
-    let failed = 0
-    for (const file of files) {
-      try {
-        const response = await fetch(
-          `/api/${server.id}/upload?path=${encodeURIComponent(cwd || "/")}&name=${encodeURIComponent(file.name)}`,
-          { method: "POST", body: file },
-        )
-        if (!active.current) return
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      } catch (error) {
-        failed += 1
-        toast.add({
-          title: `Upload failed: ${file.name}`,
-          description: String(error),
-          type: "error",
-          timeout: 2600,
-        })
-      }
+    const destinationPath = cwd || "/"
+    await onUploadBatch({
+      serverId: server.id,
+      destinationPath,
+      files: [...files],
+    })
+    if (
+      active.current &&
+      (sessionRef.current.paths[server.id] || "/") === destinationPath
+    ) {
+      await load(destinationPath)
     }
-    if (!active.current) return
-    if (!failed) {
-      toast.add({ title: "Upload complete", type: "success", timeout: 2600 })
-    } else if (failed < files.length) {
-      toast.add({
-        title: `${files.length - failed} of ${files.length} uploads completed`,
-        type: "warning",
-        timeout: 2600,
-      })
-    }
-    await load(cwd)
   }
   const openSend = (entry: FileEntry) => {
     const first = servers.find((candidate) => candidate.kind === "ssh" || candidate.kind === "nas")
@@ -334,14 +331,23 @@ export function Explorer({
 
   const entries = useMemo(() => {
     let result = [...(listing?.entries ?? [])]
-    if (!hidden) result = result.filter((entry) => !entry.name.startsWith(".") && entry.name !== "#recycle")
-    if (filter) result = result.filter((entry) => entry.name.toLowerCase().includes(filter.toLowerCase()))
+    if (!hidden) {
+      result = result.filter(
+        (entry) => !entry.name.startsWith(".") && entry.name !== "#recycle",
+      )
+    }
+    if (filter) {
+      const query = filter.toLowerCase()
+      result = result.filter((entry) => entry.name.toLowerCase().includes(query))
+    }
     const direction = sort.ascending ? 1 : -1
     result.sort((a, b) => {
       if (a.isdir !== b.isdir) return a.isdir ? -1 : 1
-      const av = sort.key === "name" ? a.name.toLowerCase() : sort.key === "size" ? (a.isdir ? -1 : a.size) : a.mtime
-      const bv = sort.key === "name" ? b.name.toLowerCase() : sort.key === "size" ? (b.isdir ? -1 : b.size) : b.mtime
-      return av < bv ? -direction : av > bv ? direction : 0
+      const av = sortValue(a, sort.key)
+      const bv = sortValue(b, sort.key)
+      if (av < bv) return -direction
+      if (av > bv) return direction
+      return 0
     })
     return result
   }, [filter, hidden, listing, sort])
@@ -355,7 +361,9 @@ export function Explorer({
     }))
   }
   const currentParent = listing?.parent || parentPath(cwd)
-  const destinations = servers.filter((candidate) => candidate.kind === "ssh" || candidate.kind === "nas")
+  const destinations = servers.filter(
+    (candidate) => candidate.kind === "ssh" || candidate.kind === "nas",
+  )
 
   return (
     <div
@@ -367,269 +375,293 @@ export function Explorer({
         void upload([...event.dataTransfer.files])
       }}
     >
-    <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Parent folder"
-        disabled={!cwd || cwd === "/" || currentParent === cwd}
-        onClick={() => {
-          const currentPath = cwd || "/"
-          onSessionChange((current) => ({
-            ...current,
-            forward: {
-              ...current.forward,
-              [server.id]: [...(current.forward[server.id] || []), currentPath],
-            },
-            filter: "",
-          }))
-          setSelected(null)
-          void load(currentParent)
-        }}
-      >
-        <ArrowUp />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Forward"
-        disabled={!session.forward[server.id]?.length}
-        onClick={() => {
-          const stack = session.forward[server.id] || []
-          const target = stack.at(-1)
-          if (!target) return
-          onSessionChange((current) => ({
-            ...current,
-            forward: {
-              ...current.forward,
-              [server.id]: (current.forward[server.id] || []).slice(0, -1),
-            },
-            filter: "",
-          }))
-          setSelected(null)
-          void load(target)
-        }}
-      >
-        <ArrowRight />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Refresh"
-        onClick={() => void load(cwd)}
-      >
-        <RefreshCw />
-      </Button>
-      {server.kind === "ssh" && (
-        <>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Upload files here"
-            onClick={() => inputRef.current?.click()}
-          >
-            <Upload />
-          </Button>
-          <input
-            ref={inputRef}
-            className="hidden"
-            type="file"
-            multiple
-            onChange={(event) => {
-              const files = [...(event.currentTarget.files ?? [])]
-              event.currentTarget.value = ""
-              void upload(files)
-            }}
-          />
-        </>
-      )}
-      <Breadcrumbs server={server} path={cwd || "/"} onGo={enter} />
-      <Input
-        className="ml-auto w-40"
-        aria-label="Filter files"
-        placeholder="filter…"
-        value={filter}
-        onChange={(event) =>
-          onSessionChange((current) => ({
-            ...current,
-            filterHost: server.id,
-            filter: event.target.value,
-          }))
-        }
-      />
-      <label className="flex items-center gap-2 text-xs">
-        <Checkbox
-          checked={hidden}
-          onCheckedChange={(checked) =>
-            onSessionChange((current) => ({ ...current, hidden: checked }))
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Parent folder"
+          disabled={!cwd || cwd === "/" || currentParent === cwd}
+          onClick={() => {
+            const currentPath = cwd || "/"
+            onSessionChange((current) => ({
+              ...current,
+              forward: {
+                ...current.forward,
+                [server.id]: [...(current.forward[server.id] || []), currentPath],
+              },
+              filter: "",
+            }))
+            setSelected(null)
+            void load(currentParent)
+          }}
+        >
+          <ArrowUp />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Forward"
+          disabled={!session.forward[server.id]?.length}
+          onClick={() => {
+            const stack = session.forward[server.id] || []
+            const target = stack.at(-1)
+            if (!target) return
+            onSessionChange((current) => ({
+              ...current,
+              forward: {
+                ...current.forward,
+                [server.id]: (current.forward[server.id] || []).slice(0, -1),
+              },
+              filter: "",
+            }))
+            setSelected(null)
+            void load(target)
+          }}
+        >
+          <ArrowRight />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Refresh"
+          onClick={() => void load(cwd)}
+        >
+          <RefreshCw />
+        </Button>
+        {server.kind === "ssh" && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Upload files here"
+              onClick={() => inputRef.current?.click()}
+            >
+              <Upload />
+            </Button>
+            <input
+              ref={inputRef}
+              className="hidden"
+              type="file"
+              multiple
+              onChange={(event) => {
+                const files = [...(event.currentTarget.files ?? [])]
+                event.currentTarget.value = ""
+                void upload(files)
+              }}
+            />
+          </>
+        )}
+        <Breadcrumbs server={server} path={cwd || "/"} onGo={enter} />
+        <Input
+          className="ml-auto w-40"
+          aria-label="Filter files"
+          placeholder="filter…"
+          value={filter}
+          onChange={(event) =>
+            onSessionChange((current) => ({
+              ...current,
+              filterHost: server.id,
+              filter: event.target.value,
+            }))
           }
         />
-        HIDDEN
-      </label>
-    </div>
-    <div className="flex min-h-0 flex-1">
-      <ContextMenu>
-        <ContextMenuTrigger className="min-w-0 flex-1">
-          <ScrollArea className="h-full">
-            <div className="grid grid-cols-[minmax(220px,1fr)_100px_130px] border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-              <button className="text-left" onClick={() => changeSort("name")}>
-                NAME {sort.key === "name" ? sort.ascending ? "↑" : "↓" : ""}
-              </button>
-              <button className="text-right" onClick={() => changeSort("size")}>
-                SIZE {sort.key === "size" ? sort.ascending ? "↑" : "↓" : ""}
-              </button>
-              <button className="text-right" onClick={() => changeSort("mtime")}>
-                MODIFIED {sort.key === "mtime" ? sort.ascending ? "↑" : "↓" : ""}
-              </button>
-            </div>
-            {loading ? (
-              <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
-                <Spinner /> Listing {server.name}:{cwd || "home"}…
+        <label className="flex items-center gap-2 text-xs">
+          <Checkbox
+            checked={hidden}
+            onCheckedChange={(checked) =>
+              onSessionChange((current) => ({ ...current, hidden: checked }))
+            }
+          />
+          HIDDEN
+        </label>
+      </div>
+      <div className="flex min-h-0 flex-1">
+        <ContextMenu>
+          <ContextMenuTrigger className="min-w-0 flex-1">
+            <ScrollArea className="h-full">
+              <div className="grid grid-cols-[minmax(220px,1fr)_100px_130px] border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                <button className="text-left" onClick={() => changeSort("name")}>
+                  NAME {sortIndicator(sort, "name")}
+                </button>
+                <button className="text-right" onClick={() => changeSort("size")}>
+                  SIZE {sortIndicator(sort, "size")}
+                </button>
+                <button className="text-right" onClick={() => changeSort("mtime")}>
+                  MODIFIED {sortIndicator(sort, "mtime")}
+                </button>
               </div>
-            ) : listing?.error ? (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>Couldn’t list this folder.</EmptyTitle>
-                  <EmptyDescription>{listing.error}</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : entries.length ? (
-              entries.map((entry) => (
-                <FileRow
-                  key={entry.name}
-                  entry={entry}
-                  selected={selected?.name === entry.name}
-                  onSelect={() =>
-                    entry.isdir ? enter(joinPath(cwd, entry.name)) : setSelected(entry)
-                  }
-                  onRename={() => promptRename(entry)}
-                  onDelete={() => setDeleteEntry(entry)}
-                  onCopy={() => copyPath(entry)}
-                  onDownload={() => download(entry)}
-                  onSend={() => openSend(entry)}
-                  canTransfer={
-                    !entry.isdir && (server.kind === "ssh" || server.kind === "nas")
-                  }
-                />
-              ))
-            ) : (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>Empty folder{filter ? " (filter active)" : ""}.</EmptyTitle>
-                </EmptyHeader>
-              </Empty>
-            )}
-          </ScrollArea>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          {!loading && !listing?.error && (
-            <>
-              <ContextMenuItem onClick={() => promptNew("file")}>
-                <FilePlus2 /> New file…
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => promptNew("folder")}>
-                <FolderPlus /> New folder…
-              </ContextMenuItem>
-              {server.kind === "ssh" && (
-                <ContextMenuItem onClick={() => inputRef.current?.click()}>
-                  <Upload /> Upload files here…
-                </ContextMenuItem>
+              {loading ? (
+                <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+                  <Spinner /> Listing {server.name}:{cwd || "home"}…
+                </div>
+              ) : listing?.error ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>Couldn’t list this folder.</EmptyTitle>
+                    <EmptyDescription>{listing.error}</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : entries.length ? (
+                entries.map((entry) => (
+                  <FileRow
+                    key={entry.name}
+                    entry={entry}
+                    selected={selected?.name === entry.name}
+                    onSelect={() =>
+                      entry.isdir
+                        ? enter(joinPath(cwd, entry.name))
+                        : setSelected(entry)
+                    }
+                    onRename={() => promptRename(entry)}
+                    onDelete={() => setDeleteEntry(entry)}
+                    onCopy={() => copyPath(entry)}
+                    onDownload={() => download(entry)}
+                    onSend={() => openSend(entry)}
+                    canTransfer={
+                      !entry.isdir && (server.kind === "ssh" || server.kind === "nas")
+                    }
+                  />
+                ))
+              ) : (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>Empty folder{filter ? " (filter active)" : ""}.</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
               )}
-              <ContextMenuSeparator />
-            </>
-          )}
-          <ContextMenuItem onClick={() => void load(cwd)}>
-            <RefreshCw /> Refresh
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-      <aside className="w-64 shrink-0 border-l p-4">
-        <Preview
-          entry={selected}
-          server={server}
-          cwd={cwd}
-          onOpen={() => selected && enter(joinPath(cwd, selected.name), true)}
-          onTerminal={onOpenTerminal}
-          onCopy={() => selected && copyPath(selected)}
-          onDownload={() => selected && download(selected)}
-          onSend={() => selected && openSend(selected)}
-        />
-      </aside>
-    </div>
-    <NamePrompt state={prompt} onClose={() => setPrompt(null)} />
-    <AlertDialog
-      open={deleteEntry !== null}
-      onOpenChange={(open) => {
-        if (!open) setDeleteEntry(null)
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {deleteEntry?.name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This cannot be undone
-            {deleteEntry?.isdir ? " and everything inside the folder will be removed" : ""}.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            onClick={() => {
-              if (deleteEntry) void mutate("delete", joinPath(cwd, deleteEntry.name))
-              setDeleteEntry(null)
-            }}
-          >
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-    <Dialog
-      open={sendEntry !== null}
-      onOpenChange={(open) => {
-        if (!open) setSendEntry(null)
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Send “{sendEntry?.name}”</DialogTitle>
-          <DialogDescription>
-            Copies over the lab network with live progress in Transfers.
-          </DialogDescription>
-        </DialogHeader>
-        <label className="grid gap-2 text-sm">
-          Destination host
-          <Select
-            value={sendHost}
-            onValueChange={(value) => {
-              const host = servers.find((item) => item.id === value)
-              setSendHost(value ?? "")
-              setSendPath(host?.home || "/")
-            }}
-          >
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {destinations.map((host) => (
-                <SelectItem key={host.id} value={host.id}>
-                  {host.name}{host.kind === "nas" ? " · NAS" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="grid gap-2 text-sm">
-          Destination folder
-          <Input value={sendPath} onChange={(event) => setSendPath(event.target.value)} />
-        </label>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setSendEntry(null)}>Cancel</Button>
-          <Button onClick={() => void submitSend()}>Send</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            </ScrollArea>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            {!loading && !listing?.error && (
+              <>
+                <ContextMenuItem onClick={() => promptNew("file")}>
+                  <FilePlus2 /> New file…
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => promptNew("folder")}>
+                  <FolderPlus /> New folder…
+                </ContextMenuItem>
+                {server.kind === "ssh" && (
+                  <ContextMenuItem onClick={() => inputRef.current?.click()}>
+                    <Upload /> Upload files here…
+                  </ContextMenuItem>
+                )}
+                <ContextMenuSeparator />
+              </>
+            )}
+            <ContextMenuItem onClick={() => void load(cwd)}>
+              <RefreshCw /> Refresh
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <aside className="w-64 shrink-0 border-l p-4">
+          <Preview
+            entry={selected}
+            server={server}
+            cwd={cwd}
+            onOpen={() => selected && enter(joinPath(cwd, selected.name), true)}
+            onTerminal={onOpenTerminal}
+            onCopy={() => selected && copyPath(selected)}
+            onDownload={() => selected && download(selected)}
+            onSend={() => selected && openSend(selected)}
+          />
+        </aside>
+      </div>
+      <NamePrompt state={prompt} onClose={() => setPrompt(null)} />
+      <AlertDialog
+        open={deleteEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteEntry(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleteEntry?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone
+              {deleteEntry?.isdir
+                ? " and everything inside the folder will be removed"
+                : ""}
+              .
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteEntry) void mutate("delete", joinPath(cwd, deleteEntry.name))
+                setDeleteEntry(null)
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <Dialog
+        open={sendEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setSendEntry(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send “{sendEntry?.name}”</DialogTitle>
+            <DialogDescription>
+              Copies over the lab network with live progress in Transfers.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="grid gap-2 text-sm">
+            Destination host
+            <Select
+              value={sendHost}
+              onValueChange={(value) => {
+                const host = servers.find((item) => item.id === value)
+                setSendHost(value ?? "")
+                setSendPath(host?.home || "/")
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {destinations.map((host) => (
+                  <SelectItem key={host.id} value={host.id}>
+                    {host.name}
+                    {host.kind === "nas" ? " · NAS" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="grid gap-2 text-sm">
+            Destination folder
+            <Input
+              value={sendPath}
+              onChange={(event) => setSendPath(event.target.value)}
+            />
+          </label>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendEntry(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void submitSend()}>Send</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
+}
+
+function sortValue(entry: FileEntry, key: SortKey) {
+  if (key === "name") return entry.name.toLowerCase()
+  if (key === "size") return entry.isdir ? -1 : entry.size
+  return entry.mtime
+}
+
+function sortIndicator(sort: ExplorerSessionState["sort"], key: SortKey) {
+  if (sort.key !== key) return ""
+  return sort.ascending ? "↑" : "↓"
 }
 
 function Breadcrumbs({
@@ -644,19 +676,27 @@ function Breadcrumbs({
   let built = ""
   return (
     <div className="flex min-w-0 items-center overflow-hidden rounded-md border px-2 text-xs">
-      <button className="font-medium" onClick={() => onGo("/")}>{server.name}</button>
-      {path.split("/").filter(Boolean).map((part) => {
-        built += `/${part}`
-        const target = built
-        return (
-          <span key={target} className="flex">
-            <span className="px-1 text-muted-foreground">/</span>
-            <button className="max-w-28 truncate" onClick={() => onGo(target)}>
-              {part}
-            </button>
-          </span>
-        )
-      })}
+      <button className="font-medium" onClick={() => onGo("/")}>
+        {server.name}
+      </button>
+      {path
+        .split("/")
+        .filter(Boolean)
+        .map((part) => {
+          built += `/${part}`
+          const target = built
+          return (
+            <span key={target} className="flex">
+              <span className="px-1 text-muted-foreground">/</span>
+              <button
+                className="max-w-28 truncate"
+                onClick={() => onGo(target)}
+              >
+                {part}
+              </button>
+            </span>
+          )
+        })}
     </div>
   )
 }

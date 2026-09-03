@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { UploadBatch } from "@/features/transfers/use-transfers"
 import { json, servers } from "@/test/fixtures"
 import { createExplorerSessionState, Explorer } from "./explorer"
 
@@ -126,6 +127,21 @@ function ExplorerHarness({
   onTransfersOpen?: () => void
 }) {
   const [session, setSession] = useState(createExplorerSessionState)
+  const uploadBatch = async (batch: UploadBatch) => {
+    onTransfersOpen()
+    let failed = 0
+    for (const file of batch.files) {
+      const destination = encodeURIComponent(batch.destinationPath)
+      const name = encodeURIComponent(file.name)
+      const response = await fetch(
+        `/api/${batch.serverId}/upload?path=${destination}&name=${name}`,
+        { method: "POST", body: file },
+      )
+      if (!response.ok) failed += 1
+    }
+    return { failed, total: batch.files.length }
+  }
+
   return (
     <Explorer
       server={server}
@@ -134,6 +150,7 @@ function ExplorerHarness({
       onSessionChange={setSession}
       onOpenTerminal={vi.fn()}
       onTransfersOpen={onTransfersOpen}
+      onUploadBatch={uploadBatch}
     />
   )
 }
