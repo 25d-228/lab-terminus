@@ -86,23 +86,37 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   const dragRef = useRef<DragState | null>(null)
   const histories = useRef<Record<string, Array<{ u: number; m: number }>>>({})
   const networks = useRef<Record<string, NetState>>({})
-  const pending = useRef<HostStatus | undefined>(undefined)
+  const pendingSample = useRef<HostStatus | undefined>(undefined)
+  const pendingStatus = useRef<HostStatus | undefined>(undefined)
+  const pendingProcesses = useRef(false)
   const activeServerId = useRef(server?.id)
+  const visibleRef = useRef(visible)
   const processRef = useRef(processes)
   const statusRef = useRef(status)
 
   dragRef.current = drag
   activeServerId.current = server?.id
-  processRef.current = processes
+  visibleRef.current = visible
   statusRef.current = status
+
+  const publishProcesses = useCallback(() => {
+    if (dragRef.current) {
+      pendingProcesses.current = true
+      return
+    }
+    pendingProcesses.current = false
+    setProcesses(processRef.current)
+  }, [])
 
   const applyMonitorSample = useCallback(
     (next: HostStatus) => {
+      if (!visibleRef.current || next.id !== activeServerId.current) return
       if (dragRef.current) {
-        pending.current = next
+        pendingSample.current = next
+        pendingStatus.current = next
         return
       }
-      if (next.id === activeServerId.current) setStatus(next)
+      setStatus(next)
       onStatus(next)
       for (const gpu of next.gpus) {
         const samples = (histories.current[`${next.id}:${gpu.index}`] ||= [])
@@ -110,11 +124,10 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
         if (samples.length > HISTORY_SAMPLES) samples.shift()
       }
       updateNetwork(networks.current, next)
-      setProcesses((current) => {
-        const state = current[next.id]
-        if (!state || state.scope !== "mine" || state.loading) return current
-        return {
-          ...current,
+      const state = processRef.current[next.id]
+      if (state && state.scope === "mine" && !state.loading) {
+        processRef.current = {
+          ...processRef.current,
           [next.id]: {
             ...state,
             rows: next.top_procs || [],
@@ -122,13 +135,18 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
             error: null,
           },
         }
-      })
+        publishProcesses()
+      }
     },
-    [onStatus],
+    [onStatus, publishProcesses],
   )
 
   useEffect(() => {
     if (!fleetStatus || fleetStatus.id !== server?.id) return
+    if (dragRef.current) {
+      pendingStatus.current = fleetStatus
+      return
+    }
     setStatus(fleetStatus)
     if (visible && !networks.current[fleetStatus.id]?.sample) {
       updateNetwork(networks.current, fleetStatus)
@@ -136,14 +154,18 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   }, [fleetStatus, server?.id, visible])
 
   useEffect(() => {
-    setStatus(fleetStatus)
-  }, [server?.id])
+    if (dragRef.current) {
+      pendingStatus.current = fleetStatus
+    } else {
+      setStatus(fleetStatus)
+    }
+  }, [fleetStatus, server?.id])
 
   const processState = useCallback(
     (id: string): ProcessState =>
       processRef.current[id] || {
         scope: "mine",
-        rows: statusRef.current?.top_procs || [],
+        rows: statusRef.current?.id === id ? statusRef.current.top_procs || [] : [],
         loadedScope: "mine",
         loading: false,
         error: null,
@@ -171,7 +193,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
           : {}),
       }
       processRef.current = { ...processRef.current, [host.id]: requesting }
-      setProcesses(processRef.current)
+      publishProcesses()
 
       try {
         const next = await api<HostStatus>(
@@ -186,6 +208,13 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
         ) {
           return
         }
+        if (!visibleRef.current || activeServerId.current !== host.id) {
+          processRef.current = {
+            ...processRef.current,
+            [host.id]: { ...current, inFlight: null },
+          }
+          return
+        }
         const applied: ProcessState = {
           ...current,
           rows: next.top_procs || [],
@@ -196,7 +225,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
           inFlight: null,
         }
         processRef.current = { ...processRef.current, [host.id]: applied }
-        setProcesses(processRef.current)
+        publishProcesses()
         applyMonitorSample(next)
       } catch (error) {
         const current = processRef.current[host.id]
@@ -206,6 +235,13 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
           current.scope !== scope ||
           request <= current.applied
         ) {
+          return
+        }
+        if (!visibleRef.current || activeServerId.current !== host.id) {
+          processRef.current = {
+            ...processRef.current,
+            [host.id]: { ...current, inFlight: null },
+          }
           return
         }
         const failed: ProcessState = {
@@ -218,11 +254,11 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
           inFlight: null,
         }
         processRef.current = { ...processRef.current, [host.id]: failed }
-        setProcesses(processRef.current)
+        publishProcesses()
         networks.current[host.id] = emptyNetwork()
       }
     },
-    [applyMonitorSample, processState],
+    [applyMonitorSample, processState, publishProcesses],
   )
 
   useEffect(() => {
@@ -255,7 +291,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
       inFlight: null,
     }
     processRef.current = { ...processRef.current, [server.id]: next }
-    setProcesses(processRef.current)
+    publishProcesses()
     queueMicrotask(() => void requestStatus(server, true))
   }
 
@@ -281,10 +317,21 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
   }
 
   const applyPending = () => {
-    if (!pending.current) return
-    const next = pending.current
-    pending.current = undefined
-    queueMicrotask(() => applyMonitorSample(next))
+    const sample = pendingSample.current
+    const latestStatus = pendingStatus.current
+    pendingSample.current = undefined
+    pendingStatus.current = undefined
+
+    if (sample) applyMonitorSample(sample)
+    if (
+      latestStatus &&
+      latestStatus !== sample &&
+      visibleRef.current &&
+      latestStatus.id === activeServerId.current
+    ) {
+      setStatus(latestStatus)
+    }
+    if (pendingProcesses.current) publishProcesses()
   }
 
   const clearDragDestination = () => {
@@ -325,7 +372,7 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
 
   const sections = useMemo(
     () =>
-      status && server
+      status && server && status.id === server.id
         ? buildSections(
             status,
             processState(server.id),
@@ -336,11 +383,11 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
             changeScope,
           )
         : {},
-    [expanded, processState, server, status],
+    [expanded, processes, processState, server, status],
   )
 
   if (!visible) return null
-  if (!server || !status) {
+  if (!server || !status || status.id !== server.id) {
     return (
       <Empty className="flex-1">
         <EmptyHeader>
@@ -424,7 +471,10 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
             <div className="mb-2 flex items-center gap-2">
               <button
                 draggable
-                aria-label={`${LABELS[id]}, position ${index + 1} of ${visibleOrder.length}. Alt plus Up or Down Arrow moves this section.`}
+                aria-label={
+                  `${LABELS[id]}, position ${index + 1} of ${visibleOrder.length}. ` +
+                  "Alt plus Up or Down Arrow moves this section."
+                }
                 title="Drag to reorder · Alt+Arrow to move"
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = "move"
@@ -576,12 +626,24 @@ function buildSections(
     <div className="grid grid-cols-2 gap-3">
       <MetricCard
         label="Receive"
-        value={!status.network?.available ? "Unavailable" : network.rate ? `${bytes(network.rate.rx)}/s` : "Collecting…"}
+        value={
+          !status.network?.available
+            ? "Unavailable"
+            : network.rate
+              ? `${bytes(network.rate.rx)}/s`
+              : "Collecting…"
+        }
         points={network.rx}
       />
       <MetricCard
         label="Transmit"
-        value={!status.network?.available ? "Unavailable" : network.rate ? `${bytes(network.rate.tx)}/s` : "Collecting…"}
+        value={
+          !status.network?.available
+            ? "Unavailable"
+            : network.rate
+              ? `${bytes(network.rate.tx)}/s`
+              : "Collecting…"
+        }
         points={network.tx}
       />
     </div>
@@ -669,11 +731,19 @@ function buildSections(
 
   const utilSeries = status.gpus.map((gpu) => ({
     label: `GPU${gpu.index}`,
-    values: (histories[`${status.id}:${gpu.index}`] || [{ u: gpu.util, m: percent(gpu.mu, gpu.mt) }]).map((sample) => sample.u),
+    values: (
+      histories[`${status.id}:${gpu.index}`] || [
+        { u: gpu.util, m: percent(gpu.mu, gpu.mt) },
+      ]
+    ).map((sample) => sample.u),
   }))
   const memorySeries = status.gpus.map((gpu) => ({
     label: `GPU${gpu.index}`,
-    values: (histories[`${status.id}:${gpu.index}`] || [{ u: gpu.util, m: percent(gpu.mu, gpu.mt) }]).map((sample) => sample.m),
+    values: (
+      histories[`${status.id}:${gpu.index}`] || [
+        { u: gpu.util, m: percent(gpu.mu, gpu.mt) },
+      ]
+    ).map((sample) => sample.m),
   }))
   const historySpan = Math.max(
     1,
@@ -705,7 +775,13 @@ function buildSections(
   }
 }
 
-function Section({ heading, detail, children }: { heading: string; detail?: React.ReactNode; children: React.ReactNode }) {
+interface SectionProps {
+  heading: string
+  detail?: React.ReactNode
+  children: React.ReactNode
+}
+
+function Section({ heading, detail, children }: SectionProps) {
   return (
     <section>
       <div className="mb-2 flex items-center gap-2">
@@ -718,10 +794,21 @@ function Section({ heading, detail, children }: { heading: string; detail?: Reac
   )
 }
 
-function MetricCard({ label, value, points }: { label: string; value: string; points: number[] }) {
+interface MetricCardProps {
+  label: string
+  value: string
+  points: number[]
+}
+
+function MetricCard({ label, value, points }: MetricCardProps) {
   const max = Math.max(1, ...points)
   const line = points.length
-    ? points.map((point, index) => `${points.length < 2 ? index * 100 : (index / (points.length - 1)) * 100},${28 - (point / max) * 28}`).join(" ")
+    ? points
+        .map(
+          (point, index) =>
+            `${points.length < 2 ? index * 100 : (index / (points.length - 1)) * 100},${28 - (point / max) * 28}`,
+        )
+        .join(" ")
     : ""
   return (
     <Card>
@@ -836,7 +923,12 @@ function hostVitals(status: HostStatus) {
   )
 }
 
-function LineChart({ series, danger }: { series: Array<{ label: string; values: number[] }>; danger?: number }) {
+interface LineChartProps {
+  series: Array<{ label: string; values: number[] }>
+  danger?: number
+}
+
+function LineChart({ series, danger }: LineChartProps) {
   const [tip, setTip] = useState<{ index: number; x: number; y: number } | null>(null)
   const count = Math.max(1, ...series.map((item) => item.values.length))
   return (
@@ -851,10 +943,26 @@ function LineChart({ series, danger }: { series: Array<{ label: string; values: 
     >
       <svg className="h-36 w-full" viewBox="0 0 100 40" preserveAspectRatio="none">
         {[0, 50, 100].map((value) => (
-          <line key={value} x1="0" x2="100" y1={40 - value * 0.4} y2={40 - value * 0.4} stroke="var(--border)" strokeWidth=".3" />
+          <line
+            key={value}
+            x1="0"
+            x2="100"
+            y1={40 - value * 0.4}
+            y2={40 - value * 0.4}
+            stroke="var(--border)"
+            strokeWidth=".3"
+          />
         ))}
         {danger != null && (
-          <line x1="0" x2="100" y1={40 - danger * 0.4} y2={40 - danger * 0.4} stroke="var(--destructive)" strokeDasharray="2 2" strokeWidth=".4" />
+          <line
+            x1="0"
+            x2="100"
+            y1={40 - danger * 0.4}
+            y2={40 - danger * 0.4}
+            stroke="var(--destructive)"
+            strokeDasharray="2 2"
+            strokeWidth=".4"
+          />
         )}
         {series.map((item, seriesIndex) => (
           <polyline
@@ -863,17 +971,25 @@ function LineChart({ series, danger }: { series: Array<{ label: string; values: 
             stroke={`var(--chart-${(seriesIndex % 5) + 1})`}
             strokeWidth=".8"
             points={item.values
-              .map(
-                (value, index) =>
-                  `${item.values.length < 2 ? index * 100 : (index / (item.values.length - 1)) * 100},${40 - value * 0.4}`,
-              )
+              .map((value, index) => {
+                const x =
+                  item.values.length < 2
+                    ? index * 100
+                    : (index / (item.values.length - 1)) * 100
+                return `${x},${40 - value * 0.4}`
+              })
               .join(" ")}
           />
         ))}
       </svg>
       {tip && (
-        <div className="pointer-events-none absolute z-10 rounded-md border bg-popover p-2 text-xs shadow-md" style={{ left: tip.x + 8, top: tip.y }}>
-          {tip.index === count - 1 ? "now" : `~${((count - 1 - tip.index) * MONITOR_POLL_MS) / 1000}s ago`}
+        <div
+          className="pointer-events-none absolute z-10 rounded-md border bg-popover p-2 text-xs shadow-md"
+          style={{ left: tip.x + 8, top: tip.y }}
+        >
+          {tip.index === count - 1
+            ? "now"
+            : `~${((count - 1 - tip.index) * MONITOR_POLL_MS) / 1000}s ago`}
           {series.map((item) => (
             <div key={item.label}>
               {item.label}{" "}

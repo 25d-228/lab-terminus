@@ -94,7 +94,12 @@ export function TransferDrawer({
   )
 }
 
-function TransferRow({ job, onCancel }: { job: TransferJob; onCancel: () => void }) {
+interface TransferRowProps {
+  job: TransferJob
+  onCancel: () => void
+}
+
+function TransferRow({ job, onCancel }: TransferRowProps) {
   const percent = job.total
     ? Math.min(100, Math.round((job.done / job.total) * 100))
     : job.state === "done"

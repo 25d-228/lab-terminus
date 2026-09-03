@@ -150,7 +150,8 @@ export function TerminalWorkspace({ server, visible, theme }: TerminalWorkspaceP
         disposed: false,
       }
       sessions.current.set(key, session)
-      ;(tabs.current[host.id] ||= []).push(key)
+      const hostTabs = (tabs.current[host.id] ||= [])
+      hostTabs.push(key)
       active.current[host.id] = key
 
       ws.onopen = () => {

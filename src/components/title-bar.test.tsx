@@ -2,15 +2,27 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const windowCalls = vi.hoisted(() => ({ minimize: vi.fn(), toggleMaximize: vi.fn(), close: vi.fn(), startDragging: vi.fn() }))
+const windowCalls = vi.hoisted(() => ({
+  minimize: vi.fn(),
+  toggleMaximize: vi.fn(),
+  close: vi.fn(),
+  startDragging: vi.fn(),
+}))
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => windowCalls }))
 
 import { useTheme } from "@/hooks/use-theme"
 import { TitleBar } from "./title-bar"
 
-function Harness() { const theme = useTheme(); return <TitleBar theme={theme.theme} onThemeChange={theme.setTheme} /> }
+function Harness() {
+  const theme = useTheme()
+  return <TitleBar theme={theme.theme} onThemeChange={theme.setTheme} />
+}
 
-beforeEach(() => { localStorage.clear(); document.documentElement.classList.remove("dark"); vi.clearAllMocks() })
+beforeEach(() => {
+  localStorage.clear()
+  document.documentElement.classList.remove("dark")
+  vi.clearAllMocks()
+})
 
 describe("TitleBar", () => {
   it("defaults to light, switches theme, and calls imported native window controls", async () => {

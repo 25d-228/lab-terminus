@@ -26,8 +26,13 @@ export function useTransfers(enabled = true) {
       if (!disposed) timer = window.setTimeout(tick, TRANSFER_POLL_MS)
     }
     void tick()
-    return () => { disposed = true; window.clearTimeout(timer) }
+    return () => {
+      disposed = true
+      window.clearTimeout(timer)
+    }
   }, [enabled])
-  const activeCount = jobs.filter((job) => job.state === "active" || job.state === "queued").length
+  const activeCount = jobs.filter(
+    (job) => job.state === "active" || job.state === "queued",
+  ).length
   return { jobs, activeCount, open, setOpen, refresh }
 }
