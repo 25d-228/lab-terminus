@@ -1,5 +1,5 @@
 //! Embedded loopback API server (axum) mirroring the prototype's routes, so the
-//! existing web frontend works unchanged.
+//! frontend contracts validated by the desktop application.
 use axum::{
     extract::{Path, Query},
     http::{header, StatusCode, Uri},
@@ -14,7 +14,7 @@ use crate::status::HostStatus;
 use crate::{config, ssh};
 
 #[derive(RustEmbed)]
-#[folder = "../web"]
+#[folder = "../dist"]
 struct Assets;
 
 pub fn router() -> Router {

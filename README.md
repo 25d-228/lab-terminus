@@ -9,19 +9,32 @@ tabs. WSL counts as a server; the Synology NAS is a storage host.
 - **Shell:** Tauri 2 (Rust core + system webview).
 - **Core (Rust, incremental):** SSH/SFTP via `russh` + `russh-sftp`, local WSL PTY via
   `portable-pty`, Synology DSM via `reqwest`.
-- **Frontend:** plain HTML/CSS/JS + `xterm.js` (in `web/`), ported from the validated
-  Python prototype.
+- **Frontend:** Vite, React, strict TypeScript, Tailwind CSS, shadcn/ui Base UI, and
+  bundled xterm.js.
 
 ## Develop
 
 ```sh
-cargo tauri dev      # compile the Rust core + open the window (first build is slow)
-cargo tauri build    # produce installers (unsigned)
+npm ci               # install the locked frontend dependencies
+npm run build        # type-check and produce dist/ for the Rust embed
+cargo tauri dev      # rebuild the frontend, compile Rust, and open the app
+cargo tauri build    # rebuild the frontend and produce installers (unsigned)
+```
+
+## Validate
+
+```sh
+npm ci
+npm test
+npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 Requires the Rust toolchain (MSVC on Windows), Node, and the Tauri CLI (`cargo tauri`).
 
 ## Status
 
-Scaffolding stage: the window opens on the web frontend. The Rust SSH/SFTP/PTY/DSM
-core is being ported feature-by-feature against the working prototype as the reference.
+The Tauri window loads the production bundle from the Rust loopback server. The Rust
+core provides the SSH/SFTP/PTY/DSM services used by the React application.
