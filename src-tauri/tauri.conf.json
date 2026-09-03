@@ -4,10 +4,11 @@
   "version": "0.5.0",
   "identifier": "com.nlplab.labterminus",
   "build": {
-    "frontendDist": "../web"
+    "beforeDevCommand": "npm run build",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
     "windows": [],
     "security": {
       "csp": null

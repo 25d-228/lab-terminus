@@ -2,8 +2,10 @@
 /src-tauri/target/
 /src-tauri/gen/
 
-# Node (only if a frontend build step is added later)
+# Node / Vite generated output
 node_modules/
+dist/
+*.tsbuildinfo
 
 # Local secrets / config
 config.local.json

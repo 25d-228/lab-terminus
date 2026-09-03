@@ -14,6 +14,9 @@
 - Keep source, markup, configuration, and CSS readable. Use clear multi-line formatting; do not compress code merely to reduce the diff.
 - Give functions and variables names that describe their role. Keep functions focused, use direct control flow, and extract a helper only when it improves reuse or clarity.
 - Write comments only for non-obvious constraints, intent, or invariants. Do not narrate the code, and update or remove stale comments.
+- Manage the frontend with npm from the repository root and commit `package-lock.json`.
+- Use the configured official shadcn/ui Base UI source components for matching controls; add only components used by the application and do not hand-edit generated source unless a repository requirement demands it.
+- Keep React features typed and separated by lifecycle ownership. Effects that own timers, sockets, observers, or global listeners must clean them up deterministically.
 
 ## Errors and dependencies
 
@@ -26,6 +29,9 @@
 - Do not weaken, delete, skip, or bypass existing tests to make a change pass.
 - Run proportional focused headless checks during development and the relevant repository-native gates before pushing. For a review correction, rerun only gates affected by that correction and let CI run the authoritative full suite.
 - Treat routine local output, CI state, and pull-request metadata as executor work rather than human verification.
+- Run `npm test` for frontend behavior and `npm run build` for TypeScript and production-bundle validation.
+- Build the frontend before Rust tests or Clippy because `rust-embed` reads generated `dist` output.
+- Treat `node_modules/` and `dist/` as generated output; never commit them.
 
 ## Machine safety and human verification
 
