@@ -1,17 +1,27 @@
 import { useMemo, useState } from "react"
-import { Grid2X2, List, Server as ServerIcon } from "lucide-react"
+import { ArrowUpRight, Grid2X2, List, Search, Server as ServerIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { bytes, gpuSummary, percent } from "@/lib/format"
 import type { Folder, HostStatus, Server } from "@/types"
@@ -73,59 +83,69 @@ export function Overview({
 
   return (
     <section
-      className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5"
+      className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4"
       aria-labelledby="overview-title"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <div>
-          <h1 id="overview-title" className="text-lg font-semibold">Hosts</h1>
-          <p className="text-xs text-muted-foreground">{count} · key auth</p>
-        </div>
-        <div className="ml-3 flex flex-wrap gap-1" role="group" aria-label="Host group">
-          <Button
-            size="sm"
-            variant={group === null ? "default" : "outline"}
-            aria-pressed={group === null}
-            onClick={() => void onGroupChange(null)}
-          >
-            All
-          </Button>
-          {folders.map((folder) => (
-            <Button
-              key={folder.key}
-              size="sm"
-              variant={group === folder.key ? "default" : "outline"}
-              aria-pressed={group === folder.key}
-              onClick={() => void onGroupChange(folder.key)}
+      <Card size="sm">
+        <CardHeader className="border-b">
+          <CardTitle>
+            <h1 id="overview-title">Hosts</h1>
+          </CardTitle>
+          <CardDescription>{count} · key authentication</CardDescription>
+          <CardAction>
+            <ToggleGroup
+              value={[mode]}
+              onValueChange={changeMode}
+              variant="outline"
+              spacing={0}
+              aria-label="Overview layout"
             >
-              {folder.title}
+              <ToggleGroupItem value="grid" aria-label="Grid view">
+                <Grid2X2 />
+              </ToggleGroupItem>
+              <ToggleGroupItem value="list" aria-label="List view">
+                <List />
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="gap-3">
+          <div className="relative max-w-md">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3 size-4
+                -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              className="pl-9"
+              aria-label="Search hosts"
+              placeholder="Search name, address, or role…"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Host group">
+            <Button
+              size="sm"
+              variant={group === null ? "default" : "outline"}
+              aria-pressed={group === null}
+              onClick={() => void onGroupChange(null)}
+            >
+              All
             </Button>
-          ))}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <ToggleGroup
-            value={[mode]}
-            onValueChange={changeMode}
-            variant="outline"
-            spacing={0}
-            aria-label="Overview layout"
-          >
-            <ToggleGroupItem value="grid" aria-label="Grid view">
-              <Grid2X2 />
-            </ToggleGroupItem>
-            <ToggleGroupItem value="list" aria-label="List view">
-              <List />
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <Input
-            className="w-52"
-            aria-label="Search hosts"
-            placeholder="Search hosts…"
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-          />
-        </div>
-      </div>
+            {folders.map((folder) => (
+              <Button
+                key={folder.key}
+                size="sm"
+                variant={group === folder.key ? "default" : "outline"}
+                aria-pressed={group === folder.key}
+                onClick={() => void onGroupChange(folder.key)}
+              >
+                {folder.title}
+              </Button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
       {!filtered.length ? (
         <Empty className="flex-1">
           <EmptyHeader>
@@ -134,7 +154,7 @@ export function Overview({
           </EmptyHeader>
         </Empty>
       ) : mode === "grid" ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
           {filtered.map((server) => (
             <HostCard
               key={server.id}
@@ -145,16 +165,30 @@ export function Overview({
           ))}
         </div>
       ) : (
-        <div className="divide-y rounded-lg border">
-          {filtered.map((server) => (
-            <HostRow
-              key={server.id}
-              server={server}
-              status={statuses[server.id]}
-              onOpen={() => onOpen(server.id)}
-            />
-          ))}
-        </div>
+        <Card size="sm">
+          <CardContent className="px-0">
+            <Table className="table-fixed">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[28%]">Host</TableHead>
+                  <TableHead className="w-[32%]">Address</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="w-24 text-right">Open</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((server) => (
+                  <HostRow
+                    key={server.id}
+                    server={server}
+                    status={statuses[server.id]}
+                    onOpen={() => onOpen(server.id)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
     </section>
   )
@@ -199,9 +233,11 @@ interface HostProps {
 
 function HostCard({ server, status, onOpen }: HostProps) {
   const gpu = gpuSummary(status)
+  const hostAddress = address(server)
   return (
     <Card
-      className="cursor-pointer transition-colors hover:bg-muted/50"
+      size="sm"
+      className="cursor-pointer transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring"
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -209,45 +245,75 @@ function HostCard({ server, status, onOpen }: HostProps) {
         if (event.key === "Enter" || event.key === " ") onOpen()
       }}
     >
-      <CardHeader>
-        <div className="flex items-start gap-3">
-          <div className="rounded-md border p-2"><ServerIcon className="size-5" /></div>
+      <CardHeader className="border-b">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+            <ServerIcon className="size-4" />
+          </div>
           <div className="min-w-0">
-            <CardTitle>{server.name}</CardTitle>
-            <CardDescription className="truncate">{address(server)}</CardDescription>
+            <CardTitle className="break-words">{server.name}</CardTitle>
+            <CardDescription>{server.gpuLabel || server.kind}</CardDescription>
           </div>
         </div>
+        <CardAction>
+          <AvailabilityBadge status={status} />
+        </CardAction>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex gap-2">
-          <Badge variant="secondary">{server.gpuLabel || server.kind}</Badge>
-          {gpu && gpu.idle > 0 ? <Badge>{gpu.idle} GPU FREE</Badge> : null}
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Address</p>
+          <p className="break-all font-mono text-xs" data-full-address={hostAddress}>
+            {hostAddress}
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground">{statusText(server, status)}</p>
+        <p className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+          {statusText(server, status)}
+        </p>
+        {gpu && gpu.idle > 0 ? <Badge>{gpu.idle} GPU FREE</Badge> : null}
       </CardContent>
+      <CardFooter className="border-t">
+        <span className="text-xs font-medium">Open host</span>
+        <ArrowUpRight className="ml-auto size-4" />
+      </CardFooter>
     </Card>
   )
 }
 
 function HostRow({ server, status, onOpen }: HostProps) {
   const gpu = gpuSummary(status)
+  const hostAddress = address(server)
   return (
-    <button
-      className="flex w-full items-center gap-3 p-3 text-left hover:bg-muted/50"
-      onClick={onOpen}
-    >
-      <ServerIcon className="size-5" />
-      <span className="min-w-32">
-        <span className="block font-medium">{server.name}</span>
-        <span className="block text-xs text-muted-foreground">{address(server)}</span>
-      </span>
-      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-        {statusText(server, status)}
-      </span>
-      <Badge variant={gpu?.idle ? "default" : "secondary"}>
-        {gpu?.idle ? `${gpu.idle} FREE` : server.gpuLabel || server.kind}
-      </Badge>
-      <span className="text-xs">Open →</span>
-    </button>
+    <TableRow>
+      <TableCell className="whitespace-normal">
+        <Button variant="ghost" className="h-auto min-w-0 justify-start px-0" onClick={onOpen}>
+          <ServerIcon className="size-4 shrink-0" />
+          <span className="min-w-0 text-left">
+            <span className="block break-words font-medium">{server.name}</span>
+            <span className="block break-words text-xs text-muted-foreground">
+              {server.gpuLabel || server.kind}
+            </span>
+          </span>
+        </Button>
+      </TableCell>
+      <TableCell className="whitespace-normal">
+        <span className="block break-all font-mono text-xs" data-full-address={hostAddress}>
+          {hostAddress}
+        </span>
+      </TableCell>
+      <TableCell className="whitespace-normal">
+        <span className="text-xs text-muted-foreground">
+          {statusText(server, status)}
+        </span>
+      </TableCell>
+      <TableCell className="text-right">
+        {gpu?.idle ? <Badge>{gpu.idle} FREE</Badge> : <AvailabilityBadge status={status} />}
+      </TableCell>
+    </TableRow>
   )
+}
+
+function AvailabilityBadge({ status }: { status?: HostStatus }) {
+  if (!status) return <Badge variant="outline">connecting</Badge>
+  if (!status.online) return <Badge variant="destructive">offline</Badge>
+  return <Badge variant="secondary">available</Badge>
 }

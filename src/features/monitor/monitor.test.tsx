@@ -74,7 +74,11 @@ describe("Monitor", () => {
     expect(screen.getByText("up 1 day")).toBeInTheDocument()
     expect(screen.getByText("% · last now")).toBeInTheDocument()
     expect(screen.getByText("% of total · 90% danger")).toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: "GPU processes" }).parentElement).toHaveTextContent("2")
+    expect(
+      screen
+        .getByRole("heading", { name: "GPU processes" })
+        .closest("[data-monitor-section]"),
+    ).toHaveTextContent("2")
     const high = screen.getByText("high-vram")
     const low = screen.getByText("low-vram")
     expect(high.compareDocumentPosition(low) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

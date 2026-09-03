@@ -6,8 +6,16 @@ import { RegistryDialog, type RegistryDialogState } from "@/components/registry-
 import { TitleBar } from "@/components/title-bar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { SidebarProvider } from "@/components/ui/sidebar"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Toaster } from "@/components/ui/toast"
@@ -61,7 +69,10 @@ export function App() {
   return (
     <TooltipProvider>
       <Toaster>
-        <div className="app-frame flex h-screen min-h-[600px] w-screen min-w-[900px] flex-col overflow-hidden bg-background text-foreground">
+        <div
+          className="app-frame flex h-screen min-h-[600px] w-screen min-w-[900px]
+            flex-col overflow-hidden bg-background text-foreground"
+        >
           <TitleBar theme={theme} onThemeChange={setTheme} />
           {lab.loading ? (
             <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -80,7 +91,11 @@ export function App() {
               </EmptyHeader>
             </Empty>
           ) : (
-            <SidebarProvider className="min-h-0 flex-1" open onOpenChange={() => undefined}>
+            <SidebarProvider
+              className="min-h-0 flex-1 bg-muted/30"
+              open
+              onOpenChange={() => undefined}
+            >
               <AppSidebar
                 servers={lab.servers}
                 folders={lab.folders}
@@ -90,7 +105,7 @@ export function App() {
                 onEdit={setRegistryDialog}
                 onRefresh={lab.refreshRegistry}
               />
-              <main className="flex min-w-0 flex-1 flex-col">
+              <SidebarInset className="min-w-0 bg-muted/30">
                 {server && (
                   <HostHeader
                     server={server}
@@ -141,7 +156,7 @@ export function App() {
                   visible={tab === "monitor"}
                   onStatus={handleMonitorStatus}
                 />
-              </main>
+              </SidebarInset>
             </SidebarProvider>
           )}
           <footer className="flex h-8 shrink-0 items-center border-t bg-background px-3 text-xs text-muted-foreground">
@@ -194,60 +209,66 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
         : `${server.user}@${server.host}:${server.port}`
 
   return (
-    <>
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-        <span
-          className={`size-2 rounded-full ${
-            status?.online === false ? "bg-destructive" : "bg-chart-2"
-          }`}
-        />
-        <strong>{server.name}</strong>
-        <span className="text-xs text-muted-foreground">
-          {address}
-          {status?.up ? ` · up ${status.up}` : ""}
-        </span>
-        <div className="ml-auto flex gap-1">
-          {status?.online === false ? (
-            <Badge variant="destructive">offline</Badge>
-          ) : gpu ? (
-            <Badge variant="secondary">
-              {gpu.total > 1 ? `${gpu.total}× GPU` : "GPU"} ·{" "}
-              {status?.gpus.map((item) => `${item.util}%`).join(" / ")}
-            </Badge>
-          ) : status?.ncpu ? (
-            <Badge variant="secondary">
-              {status.ncpu} cores · load {status.load[0]}
-            </Badge>
-          ) : null}
-          {disk && (
-            <Badge variant="outline">
-              {server.kind === "nas" ? "volume" : "disk"} {percent(disk.used, disk.size)}%
-            </Badge>
-          )}
-          {status?.online !== false && <Badge>live</Badge>}
-        </div>
-      </div>
-      <Tabs value={tab} onValueChange={onTab} className="shrink-0 gap-0">
-        <TabsList
-          variant="line"
-          className="h-10 w-full justify-start rounded-none border-b px-3"
-        >
-          <TabsTrigger value="explorer">
-            <FolderOpen />
-            Explorer
-          </TabsTrigger>
-          {server.kind !== "nas" && (
-            <TabsTrigger value="terminal">
-              <TerminalIcon />
-              Terminal
-            </TabsTrigger>
-          )}
-          <TabsTrigger value="monitor">
-            {server.kind === "nas" ? <HardDrive /> : <ChartLine />}
-            {server.kind === "nas" ? "Storage" : "Monitor"}
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
-    </>
+    <div className="shrink-0 p-4 pb-0">
+      <Card size="sm">
+        <CardHeader className="border-b">
+          <div className="min-w-0">
+            <CardTitle className="flex items-center gap-2">
+              <span
+                className={`size-2 shrink-0 rounded-full ${
+                  status?.online === false ? "bg-destructive" : "bg-chart-2"
+                }`}
+              />
+              <span className="break-words">{server.name}</span>
+            </CardTitle>
+            <CardDescription className="break-all font-mono text-xs">
+              {address}
+              {status?.up ? ` · up ${status.up}` : ""}
+            </CardDescription>
+          </div>
+          <CardAction className="flex max-w-[45%] flex-wrap justify-end gap-1">
+            {status?.online === false ? (
+              <Badge variant="destructive">offline</Badge>
+            ) : gpu ? (
+              <Badge variant="secondary">
+                {gpu.total > 1 ? `${gpu.total}× GPU` : "GPU"} ·{" "}
+                {status?.gpus.map((item) => `${item.util}%`).join(" / ")}
+              </Badge>
+            ) : status?.ncpu ? (
+              <Badge variant="secondary">
+                {status.ncpu} cores · load {status.load[0]}
+              </Badge>
+            ) : null}
+            {disk && (
+              <Badge variant="outline">
+                {server.kind === "nas" ? "volume" : "disk"}{" "}
+                {percent(disk.used, disk.size)}%
+              </Badge>
+            )}
+            {status?.online !== false && <Badge>live</Badge>}
+          </CardAction>
+        </CardHeader>
+        <CardFooter className="px-2">
+          <Tabs value={tab} onValueChange={onTab} className="w-full gap-0">
+            <TabsList variant="line" className="h-9 w-full justify-start rounded-none">
+              <TabsTrigger value="explorer">
+                <FolderOpen />
+                Explorer
+              </TabsTrigger>
+              {server.kind !== "nas" && (
+                <TabsTrigger value="terminal">
+                  <TerminalIcon />
+                  Terminal
+                </TabsTrigger>
+              )}
+              <TabsTrigger value="monitor">
+                {server.kind === "nas" ? <HardDrive /> : <ChartLine />}
+                {server.kind === "nas" ? "Storage" : "Monitor"}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </CardFooter>
+      </Card>
+    </div>
   )
 }

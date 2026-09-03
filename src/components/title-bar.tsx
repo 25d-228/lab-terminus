@@ -1,7 +1,9 @@
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { Minus, Moon, Square, Sun, X } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import type { Theme } from "@/hooks/use-theme"
 
 interface TitleBarProps {
@@ -21,7 +23,7 @@ export function TitleBar({ theme, onThemeChange }: TitleBarProps) {
 
   return (
     <header
-      className="title-bar flex h-11 shrink-0 items-center gap-3 border-b bg-background px-3 select-none"
+      className="title-bar flex h-12 shrink-0 items-center gap-2 border-b bg-background px-3 select-none"
       data-tauri-drag-region
       onMouseDown={beginDrag}
       onDoubleClick={(event) => {
@@ -35,12 +37,15 @@ export function TitleBar({ theme, onThemeChange }: TitleBarProps) {
         className="brand flex items-center gap-2 text-sm font-semibold"
         data-tauri-drag-region
       >
-        <span className="size-2 rounded-full bg-chart-2" />
+        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-xs text-primary-foreground">
+          LT
+        </span>
         <span>Lab Terminus</span>
       </div>
-      <span className="text-xs text-muted-foreground" data-tauri-drag-region>
+      <Separator orientation="vertical" className="mx-1 h-5" />
+      <Badge variant="outline" data-tauri-drag-region>
         yue_ziran · NLP Lab
-      </span>
+      </Badge>
       <div
         className="flex-1 self-stretch"
         data-tauri-drag-region

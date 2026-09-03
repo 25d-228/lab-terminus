@@ -28,17 +28,21 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import { Badge } from "@/components/ui/badge"
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
 } from "@/components/ui/sidebar"
 import { toast } from "@/components/ui/toast"
 import type { AppView } from "@/hooks/use-lab-app"
@@ -150,6 +154,24 @@ export function AppSidebar({
   return (
     <>
       <Sidebar collapsible="none" className="relative h-full w-60">
+        <SidebarHeader className="gap-2 p-3">
+          <div className="flex items-center gap-2 px-2">
+            <div
+              className="flex size-8 items-center justify-center rounded-lg
+                bg-sidebar-primary text-sidebar-primary-foreground"
+            >
+              <ServerIcon className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">NLP Lab</p>
+              <p className="text-xs text-muted-foreground">Machine workspace</p>
+            </div>
+            <Badge variant="outline" className="ml-auto">
+              {servers.length}
+            </Badge>
+          </div>
+        </SidebarHeader>
+        <SidebarSeparator />
         <SidebarContent>
           <SidebarGroup>
             <SidebarMenu>
@@ -186,8 +208,9 @@ export function AppSidebar({
                   <div key={folder.key}>
                     <ContextMenu>
                       <ContextMenuTrigger className="block">
-                        <button
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-sidebar-accent"
+                        <SidebarMenuButton
+                          size="sm"
+                          className="h-auto min-h-7 items-start"
                           onClick={() => toggle(folder.key)}
                         >
                           {isCollapsed ? (
@@ -195,9 +218,11 @@ export function AppSidebar({
                           ) : (
                             <ChevronDown className="size-3" />
                           )}
-                          <span className="truncate">{folder.title}</span>
-                          <span className="ml-auto">{items.length}</span>
-                        </button>
+                          <span className="whitespace-normal break-words pr-5">
+                            {folder.title}
+                          </span>
+                          <SidebarMenuBadge>{items.length}</SidebarMenuBadge>
+                        </SidebarMenuButton>
                       </ContextMenuTrigger>
                       <ContextMenuContent>
                         <ContextMenuItem onClick={() => onEdit({ type: "folder", folder })}>
@@ -257,13 +282,14 @@ export function AppSidebar({
                   </div>
                 )
               })}
-              <button
-                className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs text-muted-foreground hover:bg-sidebar-accent"
-                onClick={() => onEdit({ type: "folder" })}
-              >
-                <FolderCog className="size-4" />
-                Add folder…
-              </button>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton onClick={() => onEdit({ type: "folder" })}>
+                    <FolderCog className="size-4" />
+                    <span>Add folder…</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
               {!folders.length && (
                 <div className="p-2 text-xs text-muted-foreground">
                   No folders configured.
@@ -272,6 +298,10 @@ export function AppSidebar({
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
+        <SidebarSeparator />
+        <SidebarFooter className="p-3 text-xs text-muted-foreground">
+          <span>{freeHosts ? `${freeHosts} host with free GPU` : "Fleet connected"}</span>
+        </SidebarFooter>
       </Sidebar>
       <AlertDialog
         open={remove !== null}
@@ -335,12 +365,15 @@ function ServerRow({
           <SidebarMenuButton
             isActive={active}
             size="lg"
+            className="h-auto min-h-12 items-start"
             onClick={() => onOpen(openTab)}
           >
             <ServerIcon />
             <span className="flex min-w-0 flex-col">
-              <span className="truncate">{server.name}</span>
-              <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+              <span className="whitespace-normal break-words">{server.name}</span>
+              <span className="whitespace-normal break-all text-xs text-muted-foreground">
+                {subtitle}
+              </span>
             </span>
             {summary ? (
               <span className="ml-auto text-xs">

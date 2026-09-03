@@ -1,10 +1,12 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
 } from "react"
 import {
@@ -41,6 +43,21 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   ContextMenu,
@@ -68,6 +85,14 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { toast } from "@/components/ui/toast"
 import type {
   UploadBatch,
@@ -367,7 +392,7 @@ export function Explorer({
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col"
+      className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-4"
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         if (!event.dataTransfer.files.length) return
@@ -375,161 +400,187 @@ export function Explorer({
         void upload([...event.dataTransfer.files])
       }}
     >
-      <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Parent folder"
-          disabled={!cwd || cwd === "/" || currentParent === cwd}
-          onClick={() => {
-            const currentPath = cwd || "/"
-            onSessionChange((current) => ({
-              ...current,
-              forward: {
-                ...current.forward,
-                [server.id]: [...(current.forward[server.id] || []), currentPath],
-              },
-              filter: "",
-            }))
-            setSelected(null)
-            void load(currentParent)
-          }}
-        >
-          <ArrowUp />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Forward"
-          disabled={!session.forward[server.id]?.length}
-          onClick={() => {
-            const stack = session.forward[server.id] || []
-            const target = stack.at(-1)
-            if (!target) return
-            onSessionChange((current) => ({
-              ...current,
-              forward: {
-                ...current.forward,
-                [server.id]: (current.forward[server.id] || []).slice(0, -1),
-              },
-              filter: "",
-            }))
-            setSelected(null)
-            void load(target)
-          }}
-        >
-          <ArrowRight />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Refresh"
-          onClick={() => void load(cwd)}
-        >
-          <RefreshCw />
-        </Button>
-        {server.kind === "ssh" && (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Upload files here"
-              onClick={() => inputRef.current?.click()}
-            >
-              <Upload />
-            </Button>
-            <input
-              ref={inputRef}
-              className="hidden"
-              type="file"
-              multiple
-              onChange={(event) => {
-                const files = [...(event.currentTarget.files ?? [])]
-                event.currentTarget.value = ""
-                void upload(files)
-              }}
-            />
-          </>
-        )}
-        <Breadcrumbs server={server} path={cwd || "/"} onGo={enter} />
-        <Input
-          className="ml-auto w-40"
-          aria-label="Filter files"
-          placeholder="filter…"
-          value={filter}
-          onChange={(event) =>
-            onSessionChange((current) => ({
-              ...current,
-              filterHost: server.id,
-              filter: event.target.value,
-            }))
-          }
-        />
-        <label className="flex items-center gap-2 text-xs">
-          <Checkbox
-            checked={hidden}
-            onCheckedChange={(checked) =>
-              onSessionChange((current) => ({ ...current, hidden: checked }))
+      <Card size="sm" className="shrink-0">
+        <CardContent className="flex flex-row flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Parent folder"
+            disabled={!cwd || cwd === "/" || currentParent === cwd}
+            onClick={() => {
+              const currentPath = cwd || "/"
+              onSessionChange((current) => ({
+                ...current,
+                forward: {
+                  ...current.forward,
+                  [server.id]: [
+                    ...(current.forward[server.id] || []),
+                    currentPath,
+                  ],
+                },
+                filter: "",
+              }))
+              setSelected(null)
+              void load(currentParent)
+            }}
+          >
+            <ArrowUp />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Forward"
+            disabled={!session.forward[server.id]?.length}
+            onClick={() => {
+              const stack = session.forward[server.id] || []
+              const target = stack.at(-1)
+              if (!target) return
+              onSessionChange((current) => ({
+                ...current,
+                forward: {
+                  ...current.forward,
+                  [server.id]: (current.forward[server.id] || []).slice(0, -1),
+                },
+                filter: "",
+              }))
+              setSelected(null)
+              void load(target)
+            }}
+          >
+            <ArrowRight />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Refresh"
+            onClick={() => void load(cwd)}
+          >
+            <RefreshCw />
+          </Button>
+          {server.kind === "ssh" && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Upload files here"
+                onClick={() => inputRef.current?.click()}
+              >
+                <Upload />
+              </Button>
+              <input
+                ref={inputRef}
+                className="hidden"
+                type="file"
+                multiple
+                onChange={(event) => {
+                  const files = [...(event.currentTarget.files ?? [])]
+                  event.currentTarget.value = ""
+                  void upload(files)
+                }}
+              />
+            </>
+          )}
+          <div className="min-w-48 flex-1">
+            <ExplorerBreadcrumb server={server} path={cwd || "/"} onGo={enter} />
+          </div>
+          <Input
+            className="w-44"
+            aria-label="Filter files"
+            placeholder="filter…"
+            value={filter}
+            onChange={(event) =>
+              onSessionChange((current) => ({
+                ...current,
+                filterHost: server.id,
+                filter: event.target.value,
+              }))
             }
           />
-          HIDDEN
-        </label>
-      </div>
-      <div className="flex min-h-0 flex-1">
+          <label className="flex items-center gap-2 text-xs">
+            <Checkbox
+              checked={hidden}
+              onCheckedChange={(checked) =>
+                onSessionChange((current) => ({ ...current, hidden: checked }))
+              }
+            />
+            HIDDEN
+          </label>
+        </CardContent>
+      </Card>
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_14rem] gap-4">
         <ContextMenu>
-          <ContextMenuTrigger className="min-w-0 flex-1">
-            <ScrollArea className="h-full">
-              <div className="grid grid-cols-[minmax(220px,1fr)_100px_130px] border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-                <button className="text-left" onClick={() => changeSort("name")}>
-                  NAME {sortIndicator(sort, "name")}
-                </button>
-                <button className="text-right" onClick={() => changeSort("size")}>
-                  SIZE {sortIndicator(sort, "size")}
-                </button>
-                <button className="text-right" onClick={() => changeSort("mtime")}>
-                  MODIFIED {sortIndicator(sort, "mtime")}
-                </button>
-              </div>
-              {loading ? (
-                <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
-                  <Spinner /> Listing {server.name}:{cwd || "home"}…
-                </div>
-              ) : listing?.error ? (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyTitle>Couldn’t list this folder.</EmptyTitle>
-                    <EmptyDescription>{listing.error}</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : entries.length ? (
-                entries.map((entry) => (
-                  <FileRow
-                    key={entry.name}
-                    entry={entry}
-                    selected={selected?.name === entry.name}
-                    onSelect={() =>
-                      entry.isdir
-                        ? enter(joinPath(cwd, entry.name))
-                        : setSelected(entry)
-                    }
-                    onRename={() => promptRename(entry)}
-                    onDelete={() => setDeleteEntry(entry)}
-                    onCopy={() => copyPath(entry)}
-                    onDownload={() => download(entry)}
-                    onSend={() => openSend(entry)}
-                    canTransfer={
-                      !entry.isdir && (server.kind === "ssh" || server.kind === "nas")
-                    }
-                  />
-                ))
-              ) : (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyTitle>Empty folder{filter ? " (filter active)" : ""}.</EmptyTitle>
-                  </EmptyHeader>
-                </Empty>
-              )}
-            </ScrollArea>
+          <ContextMenuTrigger className="min-w-0">
+            <Card className="h-full gap-0 py-0">
+              <ScrollArea className="h-full">
+                <Table className="table-fixed">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>
+                        <button
+                          aria-label={`NAME ${sortIndicator(sort, "name")}`}
+                          onClick={() => changeSort("name")}
+                        >
+                          Name {sortIndicator(sort, "name")}
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-24 text-right">
+                        <button
+                          aria-label={`SIZE ${sortIndicator(sort, "size")}`}
+                          onClick={() => changeSort("size")}
+                        >
+                          Size {sortIndicator(sort, "size")}
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-32 text-right">
+                        <button
+                          aria-label={`MODIFIED ${sortIndicator(sort, "mtime")}`}
+                          onClick={() => changeSort("mtime")}
+                        >
+                          Modified {sortIndicator(sort, "mtime")}
+                        </button>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loading ? (
+                      <TableMessage>
+                        <Spinner /> Listing {server.name}:{cwd || "home"}…
+                      </TableMessage>
+                    ) : listing?.error ? (
+                      <TableMessage>
+                        Couldn’t list this folder. {listing.error}
+                      </TableMessage>
+                    ) : entries.length ? (
+                      entries.map((entry) => (
+                        <FileRow
+                          key={entry.name}
+                          entry={entry}
+                          selected={selected?.name === entry.name}
+                          onSelect={() =>
+                            entry.isdir
+                              ? enter(joinPath(cwd, entry.name))
+                              : setSelected(entry)
+                          }
+                          onRename={() => promptRename(entry)}
+                          onDelete={() => setDeleteEntry(entry)}
+                          onCopy={() => copyPath(entry)}
+                          onDownload={() => download(entry)}
+                          onSend={() => openSend(entry)}
+                          canTransfer={
+                            !entry.isdir &&
+                            (server.kind === "ssh" || server.kind === "nas")
+                          }
+                        />
+                      ))
+                    ) : (
+                      <TableMessage>
+                        Empty folder{filter ? " (filter active)" : ""}.
+                      </TableMessage>
+                    )}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
+            </Card>
           </ContextMenuTrigger>
           <ContextMenuContent>
             {!loading && !listing?.error && (
@@ -553,18 +604,24 @@ export function Explorer({
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
-        <aside className="w-64 shrink-0 border-l p-4">
-          <Preview
-            entry={selected}
-            server={server}
-            cwd={cwd}
-            onOpen={() => selected && enter(joinPath(cwd, selected.name), true)}
-            onTerminal={onOpenTerminal}
-            onCopy={() => selected && copyPath(selected)}
-            onDownload={() => selected && download(selected)}
-            onSend={() => selected && openSend(selected)}
-          />
-        </aside>
+        <Card size="sm" className="min-h-0">
+          <CardHeader className="border-b">
+            <CardTitle>Selection</CardTitle>
+            <CardDescription>File details and actions</CardDescription>
+          </CardHeader>
+          <CardContent className="min-h-0 overflow-auto">
+            <Preview
+              entry={selected}
+              server={server}
+              cwd={cwd}
+              onOpen={() => selected && enter(joinPath(cwd, selected.name), true)}
+              onTerminal={onOpenTerminal}
+              onCopy={() => selected && copyPath(selected)}
+              onDownload={() => selected && download(selected)}
+              onSend={() => selected && openSend(selected)}
+            />
+          </CardContent>
+        </Card>
       </div>
       <NamePrompt state={prompt} onClose={() => setPrompt(null)} />
       <AlertDialog
@@ -664,7 +721,7 @@ function sortIndicator(sort: ExplorerSessionState["sort"], key: SortKey) {
   return sort.ascending ? "↑" : "↓"
 }
 
-function Breadcrumbs({
+function ExplorerBreadcrumb({
   server,
   path,
   onGo,
@@ -675,29 +732,44 @@ function Breadcrumbs({
 }) {
   let built = ""
   return (
-    <div className="flex min-w-0 items-center overflow-hidden rounded-md border px-2 text-xs">
-      <button className="font-medium" onClick={() => onGo("/")}>
-        {server.name}
-      </button>
-      {path
-        .split("/")
-        .filter(Boolean)
-        .map((part) => {
-          built += `/${part}`
-          const target = built
-          return (
-            <span key={target} className="flex">
-              <span className="px-1 text-muted-foreground">/</span>
-              <button
-                className="max-w-28 truncate"
-                onClick={() => onGo(target)}
-              >
-                {part}
-              </button>
-            </span>
-          )
-        })}
-    </div>
+    <Breadcrumb>
+      <BreadcrumbList className="flex-wrap">
+        <BreadcrumbItem>
+          <BreadcrumbLink
+            className="font-medium"
+            render={<button type="button" />}
+            onClick={() => onGo("/")}
+          >
+            {server.name}
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        {path
+          .split("/")
+          .filter(Boolean)
+          .map((part, index, parts) => {
+            built += `/${part}`
+            const target = built
+            const current = index === parts.length - 1
+            return (
+              <Fragment key={target}>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  {current ? (
+                    <BreadcrumbPage className="break-all">{part}</BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbLink
+                      render={<button type="button" />}
+                      onClick={() => onGo(target)}
+                    >
+                      {part}
+                    </BreadcrumbLink>
+                  )}
+                </BreadcrumbItem>
+              </Fragment>
+            )
+          })}
+      </BreadcrumbList>
+    </Breadcrumb>
   )
 }
 
@@ -713,6 +785,16 @@ interface FileRowProps {
   canTransfer: boolean
 }
 
+function TableMessage({ children }: { children: ReactNode }) {
+  return (
+    <TableRow>
+      <TableCell colSpan={3} className="h-28 text-center text-muted-foreground">
+        <span className="inline-flex items-center gap-2">{children}</span>
+      </TableCell>
+    </TableRow>
+  )
+}
+
 function FileRow({
   entry,
   selected,
@@ -724,30 +806,28 @@ function FileRow({
   onSend,
   canTransfer,
 }: FileRowProps) {
-  const rowClass = [
-    "grid w-full grid-cols-[minmax(220px,1fr)_100px_130px] items-center",
-    "px-3 py-2 text-left text-sm hover:bg-muted/50",
-    selected ? "bg-muted" : "",
-    entry.name.startsWith(".") ? "opacity-60" : "",
-  ].join(" ")
   return (
     <ContextMenu>
-      <ContextMenuTrigger className="block">
-        <button
-          className={rowClass}
-          onClick={onSelect}
-        >
-          <span className="flex min-w-0 items-center gap-2">
+      <ContextMenuTrigger
+        render={
+          <TableRow
+            data-state={selected ? "selected" : undefined}
+            className={entry.name.startsWith(".") ? "opacity-60" : undefined}
+          />
+        }
+      >
+        <TableCell className="whitespace-normal">
+          <button className="flex min-w-0 items-center gap-2" onClick={onSelect}>
             <FileIcon entry={entry} />
-            <span className="truncate">{entry.name}</span>
-          </span>
-          <span className="text-right text-xs text-muted-foreground">
-            {entry.isdir ? "—" : bytes(entry.size)}
-          </span>
-          <span className="text-right text-xs text-muted-foreground">
-            {entry.mtime ? age(entry.mtime) : ""}
-          </span>
-        </button>
+            <span className="break-all text-left">{entry.name}</span>
+          </button>
+        </TableCell>
+        <TableCell className="text-right text-xs text-muted-foreground">
+          {entry.isdir ? "—" : bytes(entry.size)}
+        </TableCell>
+        <TableCell className="text-right text-xs text-muted-foreground">
+          {entry.mtime ? age(entry.mtime) : ""}
+        </TableCell>
       </ContextMenuTrigger>
       <ContextMenuContent>
         {entry.isdir && (

@@ -203,7 +203,7 @@ describe("App startup", () => {
     await user.type(screen.getByRole("textbox", { name: "Filter files" }), "host-a")
     await user.click(screen.getByRole("button", { name: "Refresh" }))
 
-    await user.click(screen.getByRole("button", { name: "This Machine1" }))
+    await user.click(screen.getByRole("button", { name: "This Machine 1" }))
     await user.click(screen.getByRole("button", { name: /Ubuntu/ }))
 
     expect(screen.queryByText("host-a.txt")).not.toBeInTheDocument()
@@ -328,7 +328,7 @@ async function openHost(user: ReturnType<typeof userEvent.setup>) {
   let hostButton = [...document.querySelectorAll<HTMLButtonElement>('[data-sidebar="menu-button"]')]
     .find((button) => button.textContent?.includes("Exp19"))
   if (!hostButton) {
-    await user.click(screen.getByRole("button", { name: "Lab Servers1" }))
+    await user.click(screen.getByRole("button", { name: "Lab Servers 1" }))
     hostButton = [...document.querySelectorAll<HTMLButtonElement>('[data-sidebar="menu-button"]')]
       .find((button) => button.textContent?.includes("Exp19"))
   }

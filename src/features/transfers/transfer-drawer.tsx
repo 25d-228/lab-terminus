@@ -2,6 +2,7 @@ import { ArrowDown, ArrowRight, ArrowUp, X } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Drawer,
   DrawerClose,
@@ -113,34 +114,36 @@ function TransferRow({ job, onCancel }: TransferRowProps) {
       : job.error || `${percent}%`
 
   return (
-    <div className="space-y-2 rounded-lg border p-3">
-      <div className="flex items-center gap-2">
-        <Icon className="size-4" />
-        <span className="min-w-0 flex-1 truncate text-sm" title={job.label}>
-          {job.label}
-        </span>
-        {job.state === "active" || job.state === "queued" ? (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Cancel transfer"
-            onClick={onCancel}
-          >
-            <X />
-          </Button>
-        ) : (
-          <Badge variant={job.state === "error" ? "destructive" : "secondary"}>
-            {job.state}
-          </Badge>
-        )}
-      </div>
-      <Progress value={percent} />
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span>
-          {job.total ? `${bytes(job.done)} / ${bytes(job.total)}` : bytes(job.done)}
-        </span>
-        <span>{progressText}</span>
-      </div>
-    </div>
+    <Card size="sm">
+      <CardContent className="gap-3">
+        <div className="flex items-center gap-2">
+          <Icon className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 break-all text-sm">
+            {job.label}
+          </span>
+          {job.state === "active" || job.state === "queued" ? (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Cancel transfer"
+              onClick={onCancel}
+            >
+              <X />
+            </Button>
+          ) : (
+            <Badge variant={job.state === "error" ? "destructive" : "secondary"}>
+              {job.state}
+            </Badge>
+          )}
+        </div>
+        <Progress value={percent} />
+        <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+          <span>
+            {job.total ? `${bytes(job.done)} / ${bytes(job.total)}` : bytes(job.done)}
+          </span>
+          <span>{progressText}</span>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

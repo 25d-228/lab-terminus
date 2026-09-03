@@ -138,13 +138,16 @@ describe("TerminalWorkspace", () => {
       <TerminalWorkspace server={servers[0]} visible theme="light" />,
     )
     await user.click(screen.getByRole("button", { name: "New shell on this host" }))
-    await user.click(screen.getByRole("button", { name: "sh1" }))
-    const active = screen.getByRole("button", { name: "sh1" })
-    expect(active).toHaveClass("bg-secondary")
+    await user.click(screen.getByRole("tab", { name: "sh1" }))
+    const active = screen.getByRole("tab", { name: "sh1" })
+    expect(active).toHaveAttribute("aria-selected", "true")
 
     await user.click(screen.getByRole("button", { name: "Close shell 2" }))
 
-    expect(screen.getByRole("button", { name: "sh1" })).toHaveClass("bg-secondary")
+    expect(screen.getByRole("tab", { name: "sh1" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
     expect(terminalMocks.terminals[0].dispose).not.toHaveBeenCalled()
     expect(terminalMocks.terminals[1].dispose).toHaveBeenCalledTimes(1)
     view.unmount()

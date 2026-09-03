@@ -6,7 +6,10 @@ import { Terminal } from "@xterm/xterm"
 import { Eraser, Plus, Radio, RefreshCw, Search, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "@/components/ui/toast"
 import type { Theme } from "@/hooks/use-theme"
 import type { Server } from "@/types"
@@ -270,7 +273,7 @@ export function TerminalWorkspace({ server, visible, theme }: TerminalWorkspaceP
   )
 
   const hostTabs = server ? tabs.current[server.id] || [] : []
-  const currentKey = server ? active.current[server.id] : ""
+  const currentKey = server ? active.current[server.id] || "" : ""
   const current = sessions.current.get(currentKey)
   void version
   const search = (direction: 1 | -1) => {
@@ -281,42 +284,39 @@ export function TerminalWorkspace({ server, visible, theme }: TerminalWorkspaceP
 
   return (
     <div
-      className={`${visible ? "flex" : "hidden"} min-h-0 flex-1 flex-col bg-[var(--terminal-background)]`}
+      className={`${visible ? "flex" : "hidden"} min-h-0 flex-1 flex-col gap-3 p-4`}
       aria-hidden={!visible}
     >
-      <div className="flex min-h-11 items-center gap-1 border-b bg-background px-2 text-xs">
-        <span
-          className={`size-2 rounded-full ${current?.connected ? "bg-chart-2" : "bg-muted-foreground"}`}
-        />
-        <span>{server?.kind === "wsl" ? "wsl.exe" : "ssh"} · {server?.host}</span>
-        <span className="text-muted-foreground">
-          {current?.connected ? "connected" : "disconnected"}
-        </span>
-        <div className="ml-2 flex items-center">
-          {hostTabs.map((key, index) => (
-            <div key={key} className="flex items-center">
-              <Button
-                variant={key === currentKey ? "secondary" : "ghost"}
-                size="sm"
-                onClick={() => attach(key)}
-              >
-                sh{index + 1}
-              </Button>
-              {hostTabs.length > 1 && (
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`Close shell ${index + 1}`}
-                  onClick={() => close(key)}
-                >
-                  <X />
-                </Button>
-              )}
-            </div>
-          ))}
+      <Card size="sm" className="shrink-0">
+        <CardContent className="flex flex-row flex-wrap items-center gap-2">
+          <Badge variant={current?.connected ? "default" : "secondary"}>
+            {current?.connected ? "connected" : "disconnected"}
+          </Badge>
+          <span className="font-mono text-xs text-muted-foreground">
+            {server?.kind === "wsl" ? "wsl.exe" : "ssh"} · {server?.host}
+          </span>
+          <Tabs value={currentKey} onValueChange={(key) => key && attach(key)}>
+            <TabsList>
+              {hostTabs.map((key, index) => (
+                <div key={key} className="flex items-center">
+                  <TabsTrigger value={key}>sh{index + 1}</TabsTrigger>
+                  {hostTabs.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Close shell ${index + 1}`}
+                      onClick={() => close(key)}
+                    >
+                      <X />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </TabsList>
+          </Tabs>
           {server && (
             <Button
-              variant="ghost"
+              variant="outline"
               size="icon-sm"
               aria-label="New shell on this host"
               onClick={() => create(server)}
@@ -324,70 +324,82 @@ export function TerminalWorkspace({ server, visible, theme }: TerminalWorkspaceP
               <Plus />
             </Button>
           )}
-        </div>
-        <div className="ml-auto flex gap-1">
-          <Button
-            variant={broadcast ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => {
-              setBroadcast(!broadcast)
-              toast.add({
-                title: !broadcast
-                  ? "Broadcast ON — keystrokes go to ALL open sessions"
-                  : "Broadcast off",
-                timeout: 2600,
-              })
-            }}
-          >
-            <Radio /> Broadcast
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setFindOpen((open) => !open)}>
-            <Search /> Find
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => current?.term.clear()}>
-            <Eraser /> Clear
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              if (currentKey) close(currentKey, false)
-              if (server) create(server)
-            }}
-          >
-            <RefreshCw /> Reconnect
-          </Button>
-        </div>
-      </div>
+          <div className="ml-auto flex flex-wrap gap-1">
+            <Button
+              variant={broadcast ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => {
+                setBroadcast(!broadcast)
+                toast.add({
+                  title: !broadcast
+                    ? "Broadcast ON — keystrokes go to ALL open sessions"
+                    : "Broadcast off",
+                  timeout: 2600,
+                })
+              }}
+            >
+              <Radio /> Broadcast
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setFindOpen((open) => !open)}
+            >
+              <Search /> Find
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => current?.term.clear()}>
+              <Eraser /> Clear
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (currentKey) close(currentKey, false)
+                if (server) create(server)
+              }}
+            >
+              <RefreshCw /> Reconnect
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
       {findOpen && (
-        <div className="flex items-center gap-1 border-b bg-background p-2">
-          <Input
-            autoFocus
-            className="ml-auto w-64"
-            aria-label="Search scrollback"
-            value={find}
-            onChange={(event) => setFind(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") search(event.shiftKey ? -1 : 1)
-              if (event.key === "Escape") setFindOpen(false)
-            }}
-          />
-          <Button variant="ghost" size="sm" onClick={() => search(-1)}>Previous</Button>
-          <Button variant="ghost" size="sm" onClick={() => search(1)}>Next</Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close search"
-            onClick={() => {
-              setFindOpen(false)
-              current?.term.focus()
-            }}
-          >
-            <X />
-          </Button>
-        </div>
+        <Card size="sm" className="shrink-0">
+          <CardContent className="flex flex-row items-center gap-2">
+            <Input
+              autoFocus
+              className="ml-auto w-64"
+              aria-label="Search scrollback"
+              value={find}
+              onChange={(event) => setFind(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") search(event.shiftKey ? -1 : 1)
+                if (event.key === "Escape") setFindOpen(false)
+              }}
+            />
+            <Button variant="outline" size="sm" onClick={() => search(-1)}>
+              Previous
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => search(1)}>
+              Next
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close search"
+              onClick={() => {
+                setFindOpen(false)
+                current?.term.focus()
+              }}
+            >
+              <X />
+            </Button>
+          </CardContent>
+        </Card>
       )}
-      <div ref={mount} className="terminal-mount min-h-0 flex-1 p-2" />
+      <Card className="min-h-0 flex-1 gap-0 bg-[var(--terminal-background)] py-0">
+        <div ref={mount} className="terminal-mount min-h-0 flex-1 p-3" />
+      </Card>
     </div>
   )
 }

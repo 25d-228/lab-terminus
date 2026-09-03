@@ -1,10 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { GripVertical } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Progress } from "@/components/ui/progress"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { api } from "@/lib/api"
 import { bytes, percent } from "@/lib/format"
@@ -510,46 +525,58 @@ export function Monitor({ server, fleetStatus, visible, onStatus }: MonitorProps
               finishDrag()
             }}
           >
-            <div className="mb-2 flex items-center gap-2">
-              <button
-                draggable
-                aria-label={
-                  `${LABELS[id]}, position ${index + 1} of ${visibleOrder.length}. ` +
-                  "Alt plus Up or Down Arrow moves this section."
-                }
-                title="Drag to reorder · Alt+Arrow to move"
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = "move"
-                  event.dataTransfer.setData(
-                    "application/x-lab-terminus-monitor-section",
-                    id,
-                  )
-                  const next = { id, original: order }
-                  dragRef.current = next
-                  setDrag(next)
-                }}
-                onDragEnd={() => {
-                  dragRef.current = null
-                  setDrag(null)
-                  applyPending()
-                }}
-                onKeyDown={(event) => {
-                  if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return
-                  event.preventDefault()
-                  const direction = event.key === "ArrowUp" ? -1 : 1
-                  const target = visibleOrder[index + direction]
-                  if (target) move(id, target, direction > 0, visibleOrder)
-                }}
-              >
-                <GripVertical className="size-4 text-muted-foreground" />
-              </button>
-              <h2 className="text-sm font-semibold">{LABELS[id]}</h2>
-              <div className="h-px flex-1 bg-border" />
-              {sections[id]?.detail && (
-                <span className="text-xs text-muted-foreground">{sections[id].detail}</span>
-              )}
-            </div>
-            {sections[id]?.body}
+            <Card size="sm">
+              <CardHeader className="border-b">
+                <CardTitle className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    draggable
+                    aria-label={
+                      `${LABELS[id]}, position ${index + 1} of ${visibleOrder.length}. ` +
+                      "Alt plus Up or Down Arrow moves this section."
+                    }
+                    title="Drag to reorder · Alt+Arrow to move"
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move"
+                      event.dataTransfer.setData(
+                        "application/x-lab-terminus-monitor-section",
+                        id,
+                      )
+                      const next = { id, original: order }
+                      dragRef.current = next
+                      setDrag(next)
+                    }}
+                    onDragEnd={() => {
+                      dragRef.current = null
+                      setDrag(null)
+                      applyPending()
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        !event.altKey ||
+                        !["ArrowUp", "ArrowDown"].includes(event.key)
+                      ) {
+                        return
+                      }
+                      event.preventDefault()
+                      const direction = event.key === "ArrowUp" ? -1 : 1
+                      const target = visibleOrder[index + direction]
+                      if (target) move(id, target, direction > 0, visibleOrder)
+                    }}
+                  >
+                    <GripVertical className="size-4 text-muted-foreground" />
+                  </Button>
+                  <h2>{LABELS[id]}</h2>
+                </CardTitle>
+                {sections[id]?.detail && (
+                  <CardAction>
+                    <Badge variant="outline">{sections[id].detail}</Badge>
+                  </CardAction>
+                )}
+              </CardHeader>
+              <CardContent>{sections[id]?.body}</CardContent>
+            </Card>
           </section>
         ))}
       </div>
@@ -652,10 +679,14 @@ function buildSections(
       })}
     </div>
   ) : (
-    <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-      No GPU on this host — CPU server · {status.ncpu || "?"} cores · load{" "}
-      {status.load?.[0] ?? "?"}
-    </div>
+    <Empty className="min-h-28 border">
+      <EmptyHeader>
+        <EmptyTitle>No GPU on this host</EmptyTitle>
+        <EmptyDescription>
+          CPU server · {status.ncpu || "?"} cores · load {status.load?.[0] ?? "?"}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   )
 
   const networkSamples = Math.max(network.rx.length, network.tx.length)
@@ -745,13 +776,21 @@ function buildSections(
         ))}
       </ToggleGroup>
       {process.loading ? (
-        <div role="status" className="rounded-lg border p-5 text-sm text-muted-foreground">
-          Loading {SCOPES[process.scope]} processes…
-        </div>
+        <Empty role="status" className="min-h-28 border">
+          <EmptyHeader>
+            <EmptyTitle>Loading processes…</EmptyTitle>
+            <EmptyDescription>{SCOPES[process.scope]} scope</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : process.error ? (
-        <div role="alert" className="rounded-lg border p-5 text-sm text-destructive">
-          Could not load {SCOPES[process.scope]} processes. {process.error}
-        </div>
+        <Empty role="alert" className="min-h-28 border">
+          <EmptyHeader>
+            <EmptyTitle>
+              Could not load {SCOPES[process.scope]} processes.
+            </EmptyTitle>
+            <EmptyDescription> {process.error}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
         <ProcessTable
           columns={["USER", "PID", "CPU", "MEM", "RSS", "TIME", "COMMAND"]}
@@ -836,14 +875,19 @@ interface SectionProps {
 
 function Section({ heading, detail, children }: SectionProps) {
   return (
-    <section>
-      <div className="mb-2 flex items-center gap-2">
-        <h2 className="text-sm font-semibold">{heading}</h2>
-        <div className="h-px flex-1 bg-border" />
-        {detail && <span className="text-xs text-muted-foreground">{detail}</span>}
-      </div>
-      {children}
-    </section>
+    <Card size="sm">
+      <CardHeader className="border-b">
+        <CardTitle>
+          <h2>{heading}</h2>
+        </CardTitle>
+        {detail && (
+          <CardAction>
+            <Badge variant="outline">{detail}</Badge>
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   )
 }
 
@@ -904,44 +948,71 @@ function ProcessTable({
   setExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border">
-      <div className="grid grid-flow-col auto-cols-fr bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-        {columns.map((column) => <span key={column}>{column}</span>)}
-      </div>
-      {rows.length ? (
-        rows.map((row) => (
-          <div key={row.key}>
-            <button
-              className="grid w-full grid-flow-col auto-cols-fr px-3 py-2 text-left text-xs hover:bg-muted/50"
-              onClick={() =>
-                setExpanded((state) => ({
-                  ...state,
-                  [row.key]: !state[row.key],
-                }))
-              }
+    <Table>
+      <TableHeader>
+        <TableRow>
+          {columns.map((column) => (
+            <TableHead key={column}>{column}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.length ? (
+          rows.map((row) => (
+            <Fragment key={row.key}>
+              <TableRow
+                role="button"
+                tabIndex={0}
+                onClick={() => toggleExpanded(setExpanded, row.key)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    toggleExpanded(setExpanded, row.key)
+                  }
+                }}
+              >
+                {row.cells.map((cell, index) => (
+                  <TableCell
+                    key={index}
+                    className="truncate"
+                    title={index === row.cells.length - 1 ? row.command : undefined}
+                  >
+                    {cell}
+                  </TableCell>
+                ))}
+              </TableRow>
+              {expanded[row.key] && (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className="bg-muted/30 font-mono text-xs break-all"
+                  >
+                    {row.command}
+                  </TableCell>
+                </TableRow>
+              )}
+            </Fragment>
+          ))
+        ) : (
+          <TableRow>
+            <TableCell
+              colSpan={columns.length}
+              className="h-24 text-center text-muted-foreground"
             >
-              {row.cells.map((cell, index) => (
-                <span
-                  key={index}
-                  className="truncate"
-                  title={index === row.cells.length - 1 ? row.command : undefined}
-                >
-                  {cell}
-                </span>
-              ))}
-            </button>
-            {expanded[row.key] && (
-              <div className="border-t bg-muted/30 p-2 font-mono text-xs break-all">
-                {row.command}
-              </div>
-            )}
-          </div>
-        ))
-      ) : (
-        <div className="p-5 text-sm text-muted-foreground">{empty}</div>
-      )}
-    </div>
+              {empty}
+            </TableCell>
+          </TableRow>
+        )}
+      </TableBody>
+    </Table>
   )
+}
+
+function toggleExpanded(
+  setExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>,
+  key: string,
+) {
+  setExpanded((state) => ({ ...state, [key]: !state[key] }))
 }
 
 function hostVitals(status: HostStatus) {
@@ -983,7 +1054,11 @@ function hostVitals(status: HostStatus) {
           </Card>
         ))
       ) : (
-        <div className="rounded-lg border p-5 text-sm text-muted-foreground">No vitals reported.</div>
+        <Empty className="min-h-28 border">
+          <EmptyHeader>
+            <EmptyTitle>No vitals reported</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
       )}
     </div>
   )
