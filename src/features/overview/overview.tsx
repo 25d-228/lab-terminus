@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { ArrowUpRight, Grid2X2, List, Search, Server as ServerIcon } from "lucide-react"
 
 import { MachineStateBadge } from "@/components/machine-state"
+import { GpuUtilization } from "@/components/gpu-utilization"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -206,7 +207,12 @@ function statusText(server: Server, status?: HostStatus) {
   if (gpu) {
     const availability = gpu.idle > 0 ? `${gpu.idle} idle` : "all busy"
     const diskUsage = disk ? ` · disk ${percent(disk.used, disk.size)}%` : ""
-    return `GPU ${gpu.average}% · ${availability}${diskUsage}`
+    return (
+      <>
+        GPU <GpuUtilization value={gpu.average} /> · {availability}
+        {diskUsage}
+      </>
+    )
   }
   if (server.kind === "nas") {
     return disk

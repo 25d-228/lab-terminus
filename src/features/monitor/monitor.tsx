@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { GripVertical } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
+import { GpuUtilization } from "@/components/gpu-utilization"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -658,7 +659,13 @@ function buildSections(
                 <p className="text-xs text-muted-foreground">{gpu.name}</p>
               </div>
               <Badge className="ml-auto" variant={free ? "default" : "secondary"}>
-                {free ? "FREE" : `${gpu.util}% util`}
+                {free ? (
+                  "FREE"
+                ) : (
+                  <>
+                    <GpuUtilization value={gpu.util} /> util
+                  </>
+                )}
               </Badge>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -855,7 +862,7 @@ function buildSections(
     ...(status.gpus.length
       ? {
           utilization: {
-            body: <LineChart series={utilSeries} />,
+            body: <LineChart series={utilSeries} gpuUtilization />,
             detail: `% · last ${historySpan < 2 ? "now" : `${minutes} min`}`,
           },
           vram: {
@@ -1067,9 +1074,10 @@ function hostVitals(status: HostStatus) {
 interface LineChartProps {
   series: Array<{ label: string; values: number[] }>
   danger?: number
+  gpuUtilization?: boolean
 }
 
-function LineChart({ series, danger }: LineChartProps) {
+function LineChart({ series, danger, gpuUtilization = false }: LineChartProps) {
   const [tip, setTip] = useState<{ index: number; x: number; y: number } | null>(null)
   const count = Math.max(1, ...series.map((item) => item.values.length))
   return (
@@ -1134,7 +1142,21 @@ function LineChart({ series, danger }: LineChartProps) {
           {series.map((item) => (
             <div key={item.label}>
               {item.label}{" "}
-              <b>{Math.round(item.values[Math.min(tip.index, item.values.length - 1)] || 0)}%</b>
+              {gpuUtilization ? (
+                <GpuUtilization
+                  value={Math.round(
+                    item.values[Math.min(tip.index, item.values.length - 1)] || 0,
+                  )}
+                  className="font-semibold"
+                />
+              ) : (
+                <b>
+                  {Math.round(
+                    item.values[Math.min(tip.index, item.values.length - 1)] || 0,
+                  )}
+                  %
+                </b>
+              )}
             </div>
           ))}
         </div>
