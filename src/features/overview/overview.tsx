@@ -263,7 +263,7 @@ function HostCard({ server, status, onOpen }: HostProps) {
           </div>
         </div>
         <CardAction>
-          <MachineStateBadge status={status} />
+          <MachineStateBadge status={status} hideOnline={Boolean(gpu)} />
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -315,7 +315,7 @@ function HostRow({ server, status, onOpen }: HostProps) {
       <TableCell className="text-right">
         <div className="flex flex-wrap justify-end gap-1">
           {gpu?.idle ? <Badge>{gpu.idle} FREE</Badge> : null}
-          <MachineStateBadge status={status} />
+          <MachineStateBadge status={status} hideOnline={Boolean(gpu)} />
         </div>
       </TableCell>
     </TableRow>

@@ -18,16 +18,34 @@ function machineState(status?: Pick<HostStatus, "online">): MachineState {
 
 interface MachineStateBadgeProps {
   status?: Pick<HostStatus, "online">
+  hideOnline?: boolean
   className?: string
 }
 
-export function MachineStateBadge({ status, className }: MachineStateBadgeProps) {
+export function MachineStateBadge({
+  status,
+  hideOnline = false,
+  className,
+}: MachineStateBadgeProps) {
   const state = machineState(status)
+  const label = `Machine status: ${state}`
+
+  if (state === "online" && hideOnline) {
+    return (
+      <span
+        aria-label={label}
+        className="sr-only"
+        data-machine-state={state}
+      >
+        {state}
+      </span>
+    )
+  }
 
   return (
     <Badge
       variant="outline"
-      aria-label={`Machine status: ${state}`}
+      aria-label={label}
       data-machine-state={state}
       className={cn(statePresentation[state], className)}
     >

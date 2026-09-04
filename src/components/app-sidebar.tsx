@@ -351,6 +351,9 @@ function ServerRow({
   onRemove,
 }: ServerRowProps) {
   const summary = gpuSummary(status)
+  const showsGpuUtilization = Boolean(
+    summary && summary.idle !== summary.total,
+  )
   const openTab =
     server.kind === "nas" && defaultTab === "terminal" ? "explorer" : defaultTab
   const subtitle =
@@ -380,14 +383,17 @@ function ServerRow({
             <span className="ml-auto flex shrink-0 flex-col items-end gap-1">
               {summary ? (
                 <span className="text-xs">
-                  {summary.idle === summary.total ? (
-                    "FREE"
-                  ) : (
+                  {showsGpuUtilization ? (
                     <GpuUtilization value={summary.average} />
+                  ) : (
+                    "FREE"
                   )}
                 </span>
               ) : null}
-              <MachineStateBadge status={status} />
+              <MachineStateBadge
+                status={status}
+                hideOnline={showsGpuUtilization}
+              />
             </span>
           </SidebarMenuButton>
         </ContextMenuTrigger>
