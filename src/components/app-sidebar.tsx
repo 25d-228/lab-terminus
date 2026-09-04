@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react"
 
+import { MachineStateBadge } from "@/components/machine-state"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -375,11 +376,14 @@ function ServerRow({
                 {subtitle}
               </span>
             </span>
-            {summary ? (
-              <span className="ml-auto text-xs">
-                {summary.idle === summary.total ? "FREE" : `${summary.average}%`}
-              </span>
-            ) : null}
+            <span className="ml-auto flex items-center gap-1">
+              {summary ? (
+                <span className="text-xs">
+                  {summary.idle === summary.total ? "FREE" : `${summary.average}%`}
+                </span>
+              ) : null}
+              <MachineStateBadge status={status} compact />
+            </span>
           </SidebarMenuButton>
         </ContextMenuTrigger>
         <ContextMenuContent>

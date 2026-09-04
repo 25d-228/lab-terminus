@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { ArrowUpRight, Grid2X2, List, Search, Server as ServerIcon } from "lucide-react"
 
+import { MachineStateBadge } from "@/components/machine-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -256,7 +257,7 @@ function HostCard({ server, status, onOpen }: HostProps) {
           </div>
         </div>
         <CardAction>
-          <AvailabilityBadge status={status} />
+          <MachineStateBadge status={status} />
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -306,14 +307,11 @@ function HostRow({ server, status, onOpen }: HostProps) {
         </span>
       </TableCell>
       <TableCell className="text-right">
-        {gpu?.idle ? <Badge>{gpu.idle} FREE</Badge> : <AvailabilityBadge status={status} />}
+        <div className="flex flex-wrap justify-end gap-1">
+          {gpu?.idle ? <Badge>{gpu.idle} FREE</Badge> : null}
+          <MachineStateBadge status={status} />
+        </div>
       </TableCell>
     </TableRow>
   )
-}
-
-function AvailabilityBadge({ status }: { status?: HostStatus }) {
-  if (!status) return <Badge variant="outline">connecting</Badge>
-  if (!status.online) return <Badge variant="destructive">offline</Badge>
-  return <Badge variant="secondary">available</Badge>
 }
