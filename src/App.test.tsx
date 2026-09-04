@@ -292,7 +292,9 @@ describe("App startup", () => {
 
   it("updates sidebar and active-host state without changing the current view", async () => {
     const user = userEvent.setup()
-    let fleetStatus = status()
+    let fleetStatus = status("gpu1", {
+      gpus: [{ ...status().gpus[0], util: 49 }],
+    })
     mockApplicationFetch(() => fleetStatus)
     render(<App />)
     await screen.findByRole("heading", { name: "Hosts" })
@@ -312,6 +314,30 @@ describe("App startup", () => {
     expect(
       within(hostHeader).getByLabelText("Machine status: online"),
     ).toBeVisible()
+    expect(hostButton.querySelector('[data-gpu-utilization="49"]')).toHaveClass(
+      "text-blue-700",
+    )
+    expect(hostHeader.querySelector('[data-gpu-utilization="49"]')).toHaveClass(
+      "text-blue-700",
+    )
+
+    fleetStatus = status("gpu1", {
+      gpus: [{ ...status().gpus[0], util: 70 }],
+    })
+    document.dispatchEvent(new Event("visibilitychange"))
+
+    await waitFor(() =>
+      expect(hostButton.querySelector('[data-gpu-utilization="70"]')).toHaveClass(
+        "text-orange-700",
+      ),
+    )
+    expect(hostHeader.querySelector('[data-gpu-utilization="70"]')).toHaveClass(
+      "text-orange-700",
+    )
+    expect(screen.getByRole("tab", { name: "Explorer" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
 
     fleetStatus = status("gpu1", { online: false, error: "offline" })
     document.dispatchEvent(new Event("visibilitychange"))

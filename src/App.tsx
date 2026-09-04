@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from "react"
+import { Fragment, useCallback, useMemo, useState } from "react"
 import { ChartLine, FolderOpen, HardDrive, Terminal as TerminalIcon } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { MachineStateBadge } from "@/components/machine-state"
+import { GpuUtilization } from "@/components/gpu-utilization"
 import { RegistryDialog, type RegistryDialogState } from "@/components/registry-dialog"
 import { TitleBar } from "@/components/title-bar"
 import { Badge } from "@/components/ui/badge"
@@ -226,7 +227,12 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
             {status?.online === true && gpu ? (
               <Badge variant="secondary">
                 {gpu.total > 1 ? `${gpu.total}× GPU` : "GPU"} ·{" "}
-                {status?.gpus.map((item) => `${item.util}%`).join(" / ")}
+                {status.gpus.map((item, index) => (
+                  <Fragment key={item.index}>
+                    {index > 0 ? " / " : null}
+                    <GpuUtilization value={item.util} />
+                  </Fragment>
+                ))}
               </Badge>
             ) : status?.online === true && status.ncpu ? (
               <Badge variant="secondary">

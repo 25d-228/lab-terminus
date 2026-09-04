@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 
 import { MachineStateBadge } from "@/components/machine-state"
+import { GpuUtilization } from "@/components/gpu-utilization"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -376,13 +377,17 @@ function ServerRow({
                 {subtitle}
               </span>
             </span>
-            <span className="ml-auto flex items-center gap-1">
+            <span className="ml-auto flex shrink-0 flex-col items-end gap-1">
               {summary ? (
                 <span className="text-xs">
-                  {summary.idle === summary.total ? "FREE" : `${summary.average}%`}
+                  {summary.idle === summary.total ? (
+                    "FREE"
+                  ) : (
+                    <GpuUtilization value={summary.average} />
+                  )}
                 </span>
               ) : null}
-              <MachineStateBadge status={status} compact />
+              <MachineStateBadge status={status} />
             </span>
           </SidebarMenuButton>
         </ContextMenuTrigger>

@@ -84,6 +84,45 @@ describe("Monitor", () => {
     expect(high.compareDocumentPosition(low) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it("uses the shared GPU utilization scale for cards and utilization tooltips only", () => {
+    render(
+      <Monitor
+        server={servers[0]}
+        fleetStatus={status("gpu1", {
+          gpus: [{ ...status().gpus[0], util: 70 }],
+        })}
+        visible
+        onStatus={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText("70%")).toHaveClass("text-orange-700")
+    for (const diskPercentage of screen.getAllByText("25% used")) {
+      expect(diskPercentage).not.toHaveAttribute("data-gpu-utilization")
+    }
+
+    const utilizationSection = screen
+      .getByRole("heading", { name: "Utilization" })
+      .closest<HTMLElement>('[data-monitor-section]')!
+    const chart = utilizationSection.querySelector("svg.h-36")!.parentElement!
+    vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({
+      bottom: 100,
+      height: 100,
+      left: 0,
+      right: 100,
+      top: 0,
+      width: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+    fireEvent.mouseMove(chart, { clientX: 50 })
+
+    expect(
+      utilizationSection.querySelector('[data-gpu-utilization="70"]'),
+    ).toHaveClass("text-orange-700")
+  })
+
   it("labels unavailable network telemetry", () => {
     render(
       <Monitor

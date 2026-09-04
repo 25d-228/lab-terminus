@@ -91,12 +91,18 @@ describe("Overview", () => {
     expect(screen.getByLabelText("Machine status: online")).toBeVisible()
     expect(screen.getByLabelText("Machine status: offline")).toBeVisible()
     expect(screen.getByLabelText("Machine status: connecting")).toBeVisible()
+    expect(document.querySelector('[data-machine-state] svg')).not.toBeInTheDocument()
+    expect(screen.getByText("5%")).toHaveClass("text-blue-700")
+    expect(screen.getByText("disk 25%", { exact: false })).not.toHaveAttribute(
+      "data-gpu-utilization",
+    )
 
     await user.click(screen.getByRole("button", { name: "List view" }))
 
     expect(screen.getByLabelText("Machine status: online")).toBeVisible()
     expect(screen.getByLabelText("Machine status: offline")).toBeVisible()
     expect(screen.getByLabelText("Machine status: connecting")).toBeVisible()
+    expect(screen.getByText("5%")).toHaveClass("text-blue-700")
   })
 })
 
