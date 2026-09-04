@@ -1,4 +1,12 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -64,6 +72,7 @@ class SocketMock {
 }
 
 import { folders, json, servers, status } from "@/test/fixtures"
+import type { HostStatus } from "@/types"
 import { App } from "./App"
 
 beforeEach(() => {
@@ -280,9 +289,49 @@ describe("App startup", () => {
       "true",
     )
   })
+
+  it("updates sidebar and active-host state without changing the current view", async () => {
+    const user = userEvent.setup()
+    let fleetStatus = status()
+    mockApplicationFetch(() => fleetStatus)
+    render(<App />)
+    await screen.findByRole("heading", { name: "Hosts" })
+    await waitFor(() => expect(screen.getByText("1/1 hosts online")).toBeInTheDocument())
+    await openHost(user)
+    await screen.findByText("project")
+
+    const hostButton = [...document.querySelectorAll<HTMLButtonElement>(
+      '[data-sidebar="menu-button"]',
+    )].find((button) => button.textContent?.includes("Exp19"))!
+    const hostHeader = screen
+      .getByText(/^alice@10\.0\.0\.1:22/)
+      .closest<HTMLElement>('[data-slot="card"]')!
+    expect(
+      within(hostButton).getByLabelText("Machine status: online"),
+    ).toBeVisible()
+    expect(
+      within(hostHeader).getByLabelText("Machine status: online"),
+    ).toBeVisible()
+
+    fleetStatus = status("gpu1", { online: false, error: "offline" })
+    document.dispatchEvent(new Event("visibilitychange"))
+
+    await waitFor(() =>
+      expect(
+        within(hostButton).getByLabelText("Machine status: offline"),
+      ).toBeVisible(),
+    )
+    expect(
+      within(hostHeader).getByLabelText("Machine status: offline"),
+    ).toBeVisible()
+    expect(screen.getByRole("tab", { name: "Explorer" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+  })
 })
 
-function mockApplicationFetch() {
+function mockApplicationFetch(currentStatus: () => HostStatus = status) {
   const calls: string[] = []
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const path = String(input)
@@ -291,7 +340,7 @@ function mockApplicationFetch() {
     if (path === "/api/folders") return json(folders)
     if (path === "/api/preferences/overview-group") return json({ group: "lab" })
     if (path === "/api/transfers") return json({ jobs: [] })
-    if (path === "/api/fleet") return json({ servers: [status()], rev: 1 })
+    if (path === "/api/fleet") return json({ servers: [currentStatus()], rev: 1 })
     if (path === "/api/gpu1/ls") {
       return json({
         path: "/home/alice",

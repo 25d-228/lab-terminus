@@ -63,6 +63,41 @@ describe("Overview", () => {
     expect(screen.getByText(longAddress)).toBeVisible()
     view.unmount()
   })
+
+  it("shows every machine state in both grid and list layouts", async () => {
+    const user = userEvent.setup()
+    const connectingServer = {
+      ...servers[0],
+      id: "pending",
+      name: "Pending host",
+    }
+
+    render(
+      <Overview
+        servers={[...servers, connectingServer]}
+        folders={folders}
+        statuses={{
+          gpu1: status(),
+          local: status("local", { online: false, error: "offline" }),
+        }}
+        group={null}
+        query=""
+        onQueryChange={vi.fn()}
+        onGroupChange={vi.fn().mockResolvedValue(undefined)}
+        onOpen={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByLabelText("Machine status: online")).toBeVisible()
+    expect(screen.getByLabelText("Machine status: offline")).toBeVisible()
+    expect(screen.getByLabelText("Machine status: connecting")).toBeVisible()
+
+    await user.click(screen.getByRole("button", { name: "List view" }))
+
+    expect(screen.getByLabelText("Machine status: online")).toBeVisible()
+    expect(screen.getByLabelText("Machine status: offline")).toBeVisible()
+    expect(screen.getByLabelText("Machine status: connecting")).toBeVisible()
+  })
 })
 
 function OverviewHarness({

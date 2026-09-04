@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react"
 import { ChartLine, FolderOpen, HardDrive, Terminal as TerminalIcon } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { MachineStateBadge } from "@/components/machine-state"
 import { RegistryDialog, type RegistryDialogState } from "@/components/registry-dialog"
 import { TitleBar } from "@/components/title-bar"
 import { Badge } from "@/components/ui/badge"
@@ -214,11 +215,6 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
         <CardHeader className="border-b">
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-2">
-              <span
-                className={`size-2 shrink-0 rounded-full ${
-                  status?.online === false ? "bg-destructive" : "bg-chart-2"
-                }`}
-              />
               <span className="break-words">{server.name}</span>
             </CardTitle>
             <CardDescription className="break-all font-mono text-xs">
@@ -227,9 +223,7 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
             </CardDescription>
           </div>
           <CardAction className="flex max-w-[45%] flex-wrap justify-end gap-1">
-            {status?.online === false ? (
-              <Badge variant="destructive">offline</Badge>
-            ) : gpu ? (
+            {gpu ? (
               <Badge variant="secondary">
                 {gpu.total > 1 ? `${gpu.total}× GPU` : "GPU"} ·{" "}
                 {status?.gpus.map((item) => `${item.util}%`).join(" / ")}
@@ -245,7 +239,7 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
                 {percent(disk.used, disk.size)}%
               </Badge>
             )}
-            {status?.online !== false && <Badge>live</Badge>}
+            <MachineStateBadge status={status} />
           </CardAction>
         </CardHeader>
         <CardFooter className="px-2">
