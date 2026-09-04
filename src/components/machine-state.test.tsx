@@ -14,13 +14,13 @@ describe("MachineStateBadge", () => {
     )
 
     expect(screen.getByLabelText("Machine status: online")).toHaveClass(
-      "bg-green-500",
-      "text-white",
+      "bg-green-400",
+      "text-green-950",
       "dark:bg-green-400",
     )
     expect(screen.getByLabelText("Machine status: offline")).toHaveClass(
-      "bg-red-500",
-      "text-white",
+      "bg-red-400",
+      "text-red-950",
       "dark:bg-red-400",
     )
     expect(screen.getByLabelText("Machine status: connecting")).toHaveClass(

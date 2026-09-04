@@ -324,6 +324,19 @@ describe("App startup", () => {
     expect(
       within(hostHeader).getByLabelText("Machine status: offline"),
     ).toBeVisible()
+    expect(within(hostHeader).queryByText(/GPU ·/)).not.toBeInTheDocument()
+
+    fleetStatus = status("gpu1", {
+      online: false,
+      error: "offline",
+      gpus: [],
+      ncpu: 32,
+      up: "2 days",
+    })
+    document.dispatchEvent(new Event("visibilitychange"))
+
+    await within(hostHeader).findByText(/up 2 days/)
+    expect(within(hostHeader).queryByText(/32 cores · load/)).not.toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Explorer" })).toHaveAttribute(
       "aria-selected",
       "true",

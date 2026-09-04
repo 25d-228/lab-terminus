@@ -10,12 +10,12 @@ const statePresentation = {
   online: {
     Icon: CircleCheck,
     className:
-      "border-green-600 bg-green-500 text-white dark:border-green-300 dark:bg-green-400 dark:text-green-950",
+      "border-green-500 bg-green-400 text-green-950 dark:border-green-300 dark:bg-green-400 dark:text-green-950",
   },
   offline: {
     Icon: CircleX,
     className:
-      "border-red-600 bg-red-500 text-white dark:border-red-300 dark:bg-red-400 dark:text-red-950",
+      "border-red-500 bg-red-400 text-red-950 dark:border-red-300 dark:bg-red-400 dark:text-red-950",
   },
   connecting: {
     Icon: CircleDashed,

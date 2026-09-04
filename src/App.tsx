@@ -223,12 +223,12 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
             </CardDescription>
           </div>
           <CardAction className="flex max-w-[45%] flex-wrap justify-end gap-1">
-            {gpu ? (
+            {status?.online === true && gpu ? (
               <Badge variant="secondary">
                 {gpu.total > 1 ? `${gpu.total}× GPU` : "GPU"} ·{" "}
                 {status?.gpus.map((item) => `${item.util}%`).join(" / ")}
               </Badge>
-            ) : status?.ncpu ? (
+            ) : status?.online === true && status.ncpu ? (
               <Badge variant="secondary">
                 {status.ncpu} cores · load {status.load[0]}
               </Badge>
