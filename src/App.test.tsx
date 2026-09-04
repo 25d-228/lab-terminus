@@ -292,7 +292,7 @@ describe("App startup", () => {
 
   it("updates sidebar and active-host state without changing the current view", async () => {
     const user = userEvent.setup()
-    let fleetStatus = status("gpu1", {
+    let fleetStatus: HostStatus | undefined = status("gpu1", {
       gpus: [{ ...status().gpus[0], util: 49 }],
     })
     mockApplicationFetch(() => fleetStatus)
@@ -308,12 +308,12 @@ describe("App startup", () => {
     const hostHeader = screen
       .getByText(/^alice@10\.0\.0\.1:22/)
       .closest<HTMLElement>('[data-slot="card"]')!
-    expect(
-      within(hostButton).getByLabelText("Machine status: online"),
-    ).toBeVisible()
-    expect(
-      within(hostHeader).getByLabelText("Machine status: online"),
-    ).toBeVisible()
+    expect(within(hostButton).getByLabelText("Machine status: online")).toHaveClass(
+      "sr-only",
+    )
+    expect(within(hostHeader).getByLabelText("Machine status: online")).toHaveClass(
+      "sr-only",
+    )
     expect(hostButton.querySelector('[data-gpu-utilization="49"]')).toHaveClass(
       "text-blue-700",
     )
@@ -352,9 +352,32 @@ describe("App startup", () => {
     ).toBeVisible()
     expect(within(hostHeader).queryByText(/GPU ·/)).not.toBeInTheDocument()
 
+    fleetStatus = undefined
+    document.dispatchEvent(new Event("visibilitychange"))
+
+    await waitFor(() =>
+      expect(
+        within(hostButton).getByLabelText("Machine status: connecting"),
+      ).not.toHaveClass("sr-only"),
+    )
+    expect(
+      within(hostHeader).getByLabelText("Machine status: connecting"),
+    ).not.toHaveClass("sr-only")
+
     fleetStatus = status("gpu1", {
-      online: false,
-      error: "offline",
+      gpus: [{ ...status().gpus[0], util: 5 }],
+    })
+    document.dispatchEvent(new Event("visibilitychange"))
+
+    await waitFor(() => expect(within(hostButton).getByText("FREE")).toBeVisible())
+    expect(
+      within(hostButton).getByLabelText("Machine status: online"),
+    ).not.toHaveClass("sr-only")
+    expect(within(hostHeader).getByLabelText("Machine status: online")).toHaveClass(
+      "sr-only",
+    )
+
+    fleetStatus = status("gpu1", {
       gpus: [],
       ncpu: 32,
       up: "2 days",
@@ -362,7 +385,13 @@ describe("App startup", () => {
     document.dispatchEvent(new Event("visibilitychange"))
 
     await within(hostHeader).findByText(/up 2 days/)
-    expect(within(hostHeader).queryByText(/32 cores · load/)).not.toBeInTheDocument()
+    expect(within(hostHeader).getByText(/32 cores · load/)).toBeVisible()
+    expect(
+      within(hostButton).getByLabelText("Machine status: online"),
+    ).not.toHaveClass("sr-only")
+    expect(
+      within(hostHeader).getByLabelText("Machine status: online"),
+    ).not.toHaveClass("sr-only")
     expect(screen.getByRole("tab", { name: "Explorer" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -370,7 +399,7 @@ describe("App startup", () => {
   })
 })
 
-function mockApplicationFetch(currentStatus: () => HostStatus = status) {
+function mockApplicationFetch(currentStatus: () => HostStatus | undefined = status) {
   const calls: string[] = []
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const path = String(input)
@@ -379,7 +408,10 @@ function mockApplicationFetch(currentStatus: () => HostStatus = status) {
     if (path === "/api/folders") return json(folders)
     if (path === "/api/preferences/overview-group") return json({ group: "lab" })
     if (path === "/api/transfers") return json({ jobs: [] })
-    if (path === "/api/fleet") return json({ servers: [currentStatus()], rev: 1 })
+    if (path === "/api/fleet") {
+      const nextStatus = currentStatus()
+      return json({ servers: nextStatus ? [nextStatus] : [], rev: 1 })
+    }
     if (path === "/api/gpu1/ls") {
       return json({
         path: "/home/alice",

@@ -64,21 +64,28 @@ describe("Overview", () => {
     view.unmount()
   })
 
-  it("shows every machine state in both grid and list layouts", async () => {
+  it("hides only redundant online state in grid and list layouts", async () => {
     const user = userEvent.setup()
     const connectingServer = {
       ...servers[0],
       id: "pending",
       name: "Pending host",
     }
+    const cpuServer = {
+      ...servers[0],
+      id: "cpu",
+      name: "CPU host",
+      gpuLabel: "",
+    }
 
     render(
       <Overview
-        servers={[...servers, connectingServer]}
+        servers={[...servers, connectingServer, cpuServer]}
         folders={folders}
         statuses={{
           gpu1: status(),
           local: status("local", { online: false, error: "offline" }),
+          cpu: status("cpu", { gpus: [] }),
         }}
         group={null}
         query=""
@@ -88,23 +95,30 @@ describe("Overview", () => {
       />,
     )
 
-    expect(screen.getByLabelText("Machine status: online")).toBeVisible()
-    expect(screen.getByLabelText("Machine status: offline")).toBeVisible()
-    expect(screen.getByLabelText("Machine status: connecting")).toBeVisible()
+    expect(machineStateFor("Exp19")).toHaveClass("sr-only")
+    expect(machineStateFor("CPU host")).not.toHaveClass("sr-only")
+    expect(machineStateFor("Ubuntu")).toHaveTextContent("offline")
+    expect(machineStateFor("Pending host")).toHaveTextContent("connecting")
     expect(document.querySelector('[data-machine-state] svg')).not.toBeInTheDocument()
     expect(screen.getByText("5%")).toHaveClass("text-blue-700")
-    expect(screen.getByText("disk 25%", { exact: false })).not.toHaveAttribute(
-      "data-gpu-utilization",
-    )
+    for (const diskPercentage of screen.getAllByText("disk 25%", { exact: false })) {
+      expect(diskPercentage).not.toHaveAttribute("data-gpu-utilization")
+    }
 
     await user.click(screen.getByRole("button", { name: "List view" }))
 
-    expect(screen.getByLabelText("Machine status: online")).toBeVisible()
-    expect(screen.getByLabelText("Machine status: offline")).toBeVisible()
-    expect(screen.getByLabelText("Machine status: connecting")).toBeVisible()
+    expect(machineStateFor("Exp19", "tr")).toHaveClass("sr-only")
+    expect(machineStateFor("CPU host", "tr")).not.toHaveClass("sr-only")
+    expect(machineStateFor("Ubuntu", "tr")).toHaveTextContent("offline")
+    expect(machineStateFor("Pending host", "tr")).toHaveTextContent("connecting")
     expect(screen.getByText("5%")).toHaveClass("text-blue-700")
   })
 })
+
+function machineStateFor(name: string, container = '[data-slot="card"]') {
+  const surface = screen.getByText(name).closest<HTMLElement>(container)!
+  return surface.querySelector<HTMLElement>("[data-machine-state]")!
+}
 
 function OverviewHarness({
   group,

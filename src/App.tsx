@@ -245,7 +245,10 @@ function HostHeader({ server, status, tab, onTab }: HostHeaderProps) {
                 {percent(disk.used, disk.size)}%
               </Badge>
             )}
-            <MachineStateBadge status={status} />
+            <MachineStateBadge
+              status={status}
+              hideOnline={status?.online === true && Boolean(gpu)}
+            />
           </CardAction>
         </CardHeader>
         <CardFooter className="px-2">
